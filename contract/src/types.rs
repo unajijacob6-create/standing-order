@@ -160,6 +160,8 @@ pub struct Config {
     pub max_recipients: u32,
     pub plan_count: u64,
     pub oneclick_public_key: String,
+    /// Token contracts allowed to fund plans; `null` means any token (local testing only).
+    pub allowed_tokens: Option<Vec<AccountId>>,
 }
 
 /// Message accepted by `ft_on_transfer`.

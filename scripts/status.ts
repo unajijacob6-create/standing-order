@@ -1,18 +1,31 @@
 // Print plans, payouts and balances.
 import { cfg, view, yoctoToNear, provider } from "./lib/near.ts";
 
-const meta = await view<any>(cfg.token, "ft_metadata").catch(() => null);
-const units = meta ? 10n ** BigInt(meta.decimals) : 1n;
-const fmt = (v: string | number) => (meta ? `${Number(BigInt(v) * 1000n / units) / 1000} ${meta.symbol}` : yoctoToNear(String(v)) + " NEAR");
+type Meta = { symbol: string; decimals: number } | null;
+const metaCache = new Map<string, Meta>();
+async function tokenMeta(contract: string): Promise<Meta> {
+  if (!metaCache.has(contract)) {
+    const m: any = await view<any>(contract, "ft_metadata").catch(() => null);
+    metaCache.set(contract, m && Number.isInteger(m.decimals) && m.decimals >= 0 && m.decimals <= 36 ? { symbol: String(m.symbol), decimals: m.decimals } : null);
+  }
+  return metaCache.get(contract)!;
+}
+/** Format an amount of an FT; without usable metadata, print base units with the contract name. */
+const ftFormatter = (meta: Meta, contract: string) => (v: string | number) =>
+  meta ? `${Number(BigInt(v) * 1000n / 10n ** BigInt(meta.decimals)) / 1000} ${meta.symbol}` : `${v} base units of ${contract}`;
+const meta = await tokenMeta(cfg.token);
+const fmt = ftFormatter(meta, cfg.token);
 const now = await view<number>(cfg.contract, "now_seconds");
 const plans = await view<any[]>(cfg.contract, "get_plans", { from_index: 0, limit: 50 });
 console.log(`contract ${cfg.contract} | dao ${cfg.dao} | chain time ${new Date(now * 1000).toISOString()}`);
 console.log(`DAO token balance: ${fmt(await view<string>(cfg.token, "ft_balance_of", { account_id: cfg.dao }))}`);
 for (const p of plans) {
-  const isFt = typeof p.asset === "object";
-  const f = isFt ? fmt : (v: string) => yoctoToNear(v) + " NEAR";
+  const ftContract: string | undefined = typeof p.asset === "object" ? p.asset?.Ft?.contract : undefined;
+  // Each plan is formatted with its own token's metadata, not cfg.token's.
+  const f = ftContract ? ftFormatter(await tokenMeta(ftContract), ftContract) : (v: string | number) => yoctoToNear(String(v)) + " NEAR";
   const perRun = p.recipients.reduce((a: bigint, r: any) => a + BigInt(r.amount), 0n);
-  const ended = p.end_at !== null && (p.end_at <= now || p.next_run_at > p.end_at);
+  // Same rule as the contract's Plan::is_ended: the next run would fall after end_at.
+  const ended = p.end_at !== null && p.next_run_at > p.end_at;
   const underfunded = p.status === "Active" && BigInt(p.balance) < perRun;
   const when = ended
     ? "ended"

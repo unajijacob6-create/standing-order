@@ -26,7 +26,7 @@ const KEEPER_KEY = must("KEEPER_KEY").trim().replace(/^["']|["']$/g, "") as KeyP
 const POLL_SECONDS = Number(process.env.POLL_SECONDS ?? 15);
 const ONCE = process.argv.includes("--once");
 const LOG_FILE = process.env.KEEPER_LOG ?? path.join(here, "..", "data", "runs.jsonl");
-const CROSSCHAIN: Mode = (process.env.CROSSCHAIN as Mode) ?? (NETWORK === "mainnet" ? "live" : "dry");
+const CROSSCHAIN: Mode = parseMode(process.env.CROSSCHAIN, NETWORK === "mainnet" ? "live" : "dry");
 const TGAS_300 = 300n * 10n ** 12n;
 const MAX_CATCHUP = Number(process.env.MAX_CATCHUP ?? 3);
 
@@ -56,36 +56,71 @@ async function tick(): Promise<void> {
     log("idle", { due: 0 });
     return;
   }
+  // Each plan is isolated: one plan that keeps failing (for example a route the contract rejects
+  // because the recipient changed their destination after we quoted) must not block the others.
+  const failed: Array<{ plan_id: number; error: string }> = [];
   for (const planId of due) {
-    const { routes, routeLogs } = await buildRoutes(planId);
-    // A run with many recipients is paid over several calls; keep going until it completes.
-    // After a completed run, keep going while the plan is still due (catch up at most
-    // MAX_CATCHUP periods per tick, which absorbs delayed scheduled runs such as GitHub cron).
-    let completedRuns = 0;
-    for (let i = 0; i < 20; i++) {
-      const res = await keeper.callFunctionRaw({ contractId: CONTRACT, methodName: "run_due", args: { plan_id: planId, routes: routes.length ? routes : null }, gas: TGAS_300 });
-      const outcome = decode<Outcome>(res);
-      const entry = { at: new Date().toISOString(), plan_id: planId, outcome, tx: res.transaction.hash, routes: routeLogs.length ? routeLogs : undefined };
+    try {
+      await runPlan(planId);
+    } catch (e) {
+      const error = String(e).slice(0, 300);
+      failed.push({ plan_id: planId, error });
+      log("plan_error", { plan_id: planId, error });
+    }
+  }
+  // Surface the failure so the status endpoint shows it and `--once` exits non-zero.
+  if (failed.length) throw new Error(`${failed.length} of ${due.length} due plan(s) failed: ${failed.map((f) => `#${f.plan_id}: ${f.error}`).join("; ")}`);
+}
+
+async function runPlan(planId: number): Promise<void> {
+  // A run with many recipients is paid over several calls; keep going until it completes.
+  // After a completed run, keep going while the plan is still due (catch up at most
+  // MAX_CATCHUP periods per tick, which absorbs delayed scheduled runs such as GitHub cron).
+  let completedRuns = 0;
+  let routesDisabled = false;
+  for (let i = 0; i < 20; i++) {
+    // Fresh quotes for every call: a signed quote and its deposit address belong to one payout,
+    // so catch-up runs must never reuse them.
+    let { routes, routeLogs } = routesDisabled ? { routes: [] as Route[], routeLogs: [] as RouteLog[] } : await buildRoutes(planId);
+    let res: any;
+    let outcome: Outcome;
+    try {
+      res = await keeper.callFunctionRaw({ contractId: CONTRACT, methodName: "run_due", args: { plan_id: planId, routes: routes.length ? routes : null }, gas: TGAS_300 });
+      outcome = decode<Outcome>(res);
+    } catch (e) {
+      if (!routes.length) throw e;
+      // The contract rejected the call that carried routes; pay this plan on NEAR instead.
+      log("retried_without_routes", { plan_id: planId, error: String(e).slice(0, 300) });
+      routesDisabled = true;
+      routes = [];
+      routeLogs = [];
+      res = await keeper.callFunctionRaw({ contractId: CONTRACT, methodName: "run_due", args: { plan_id: planId, routes: null }, gas: TGAS_300 });
+      outcome = decode<Outcome>(res);
+    }
+    const entry = { at: new Date().toISOString(), plan_id: planId, outcome, tx: res.transaction.hash, routes: routeLogs.length ? routeLogs : undefined };
+    if (typeof outcome === "object" && "Sent" in outcome) {
+      // Only a Sent outcome means the contract dispatched the routed transfers.
       for (const r of routeLogs) {
         if (r.ok && r.mode === "live" && r.depositAddress) {
           state.swaps[r.depositAddress] = { plan_id: planId, recipient: r.recipient, status: "SUBMITTED", updatedAt: new Date().toISOString() };
         }
       }
       record(entry);
-      if (typeof outcome === "object" && "Sent" in outcome) {
-        state.payoutsSent += outcome.Sent.sent;
-        if (outcome.Sent.completed) state.runs += 1;
-        log("sent", entry);
-        if (outcome.Sent.completed) {
-          completedRuns += 1;
-          const stillDue = await provider.callFunction<boolean>({ contractId: CONTRACT, method: "is_due", args: { plan_id: planId } });
-          if (!stillDue || completedRuns >= MAX_CATCHUP) break;
-        }
-        continue;
+      // Counts transfers the contract dispatched in this call, not confirmed deliveries;
+      // delivery is confirmed by the on_payout callback (see get_payouts).
+      state.payoutsSent += outcome.Sent.sent;
+      if (outcome.Sent.completed) state.runs += 1;
+      log("sent", { ...entry, dispatched: true });
+      if (outcome.Sent.completed) {
+        completedRuns += 1;
+        const stillDue = await provider.callFunction<boolean>({ contractId: CONTRACT, method: "is_due", args: { plan_id: planId } });
+        if (!stillDue || completedRuns >= MAX_CATCHUP) break;
       }
-      log("skipped", entry);
-      break;
+      continue;
     }
+    record(entry);
+    log("skipped", entry);
+    break;
   }
 }
 
@@ -143,6 +178,11 @@ async function main(): Promise<void> {
       state.lastError = String(e).slice(0, 300);
       log("error", { error: state.lastError, retryInSeconds: backoff });
       backoff = Math.min(backoff * 2, 300);
+      if (ONCE) {
+        // A failed one-shot tick (CI keeper) must fail the job, not exit green.
+        process.exitCode = 1;
+        break;
+      }
     }
     if (ONCE) break;
     await sleep(backoff * 1000);
@@ -167,7 +207,7 @@ function startStatusServer(port: number): void {
     .createServer((_req, res) => {
       res.setHeader("content-type", "application/json");
       res.setHeader("access-control-allow-origin", "*");
-      res.end(JSON.stringify({ ok: true, contract: CONTRACT, account: KEEPER_ACCOUNT, ...state }, null, 2));
+      res.end(JSON.stringify({ ok: state.lastError === null, contract: CONTRACT, account: KEEPER_ACCOUNT, ...state }, null, 2));
     })
     .listen(port, () => log("status endpoint", { url: `http://localhost:${port}/` }));
 }
@@ -191,6 +231,13 @@ function record(entry: Record<string, unknown>): void {
 
 function log(event: string, detail?: unknown): void {
   console.log(JSON.stringify({ t: new Date().toISOString(), event, ...(detail && typeof detail === "object" ? detail : { detail }) }));
+}
+
+function parseMode(raw: string | undefined, fallback: Mode): Mode {
+  const v = (raw ?? "").trim().toLowerCase();
+  if (v === "") return fallback;
+  if (v === "off" || v === "dry" || v === "live") return v;
+  throw new Error(`Invalid CROSSCHAIN=${JSON.stringify(raw)}: expected one of off, dry, live (or unset for the network default)`);
 }
 
 function must(name: string): string {

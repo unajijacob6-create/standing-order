@@ -6,7 +6,7 @@
 - **Keeper**: any account; the reference keeper holds a function-call key limited to `run_due`.
 - **Recipients**: NEAR accounts; may register a cross-chain destination.
 - **1Click (NEAR Intents)**: signs quotes and executes swaps off-chain.
-- **Contract owner**: can toggle storage sponsorship, limits, and rotate the 1Click public key (`set_config`, owner-only). Cannot touch plan funds.
+- **Contract owner**: can toggle storage sponsorship, limits, the token allowlist, and rotate the 1Click public key (`set_config`, owner-only). Cannot touch plan funds.
 - **Full-access key holder of the contract account**: can redeploy the contract (see "Upgrade and admin keys").
 
 ## What each actor can and cannot do
@@ -73,8 +73,20 @@ salary. Future work: shielded payouts, where the plan records a commitment and t
   callback marks the payout `Failed` and re-credits the plan balance; the schedule still advances.
 - A plan that cannot afford a full run is reported by `get_underfunded_plans` and is not "due", so keepers do
   not burn gas on it.
-- Storage: plans created through `ft_transfer_call` draw on the sender's storage credits, or on sponsorship
-  when enabled (demo default). Disable sponsorship in production (`set_config`).
+- Storage: plan creation and every payout/route record draw on the plan owner's storage credits
+  (`storage_deposit`, minimum 0.00125 NEAR), or on sponsorship when enabled (demo default). With sponsorship off and
+  no credits, `run_due` is refused with "Insufficient storage credits" rather than spending the contract balance that
+  holds NEAR plans' funds. Disable sponsorship in production (`set_config`); a DAO then prepays about 0.0012 NEAR per
+  payout (roughly 0.012 NEAR a month for ten contributors paid monthly).
+- Token allowlist: `ft_on_transfer` can be called by any account claiming to be a token, so only contracts in
+  `allowed_tokens` may fund plans (`None` accepts any token and is meant for local tests only). The v3 → v4 migration
+  set it to the tokens existing plans already used (`usdc.fakes.testnet` on the demo deployment).
+- Quote replay: each 1Click deposit address can be paid once; reusing a signed quote fails with "Route deposit
+  address was already used". `correlation_id` in a route record comes from the unsigned part of 1Click's response
+  and is informational only.
+- Mid-run pause: a guardian may pause between the chunks of a split run. The owner can then update, sweep or
+  cancel; the unpaid remainder of that run is dropped (event `run_aborted` with paid/unpaid counts) and the period
+  counts as done, so recipients already paid are never paid twice.
 - `resume_plan` defaults to back pay (missed periods are paid one per `run_due` call); `skip_missed: true`
   forgets them. Both are explicit DAO decisions. This is payroll automation, not a vesting lock: the DAO can sweep
   at any time.

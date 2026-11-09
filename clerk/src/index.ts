@@ -16,6 +16,7 @@ import { cfg, view, TGAS, provider } from "../../scripts/lib/near.ts";
 import { proposeFunctionCall, vote as voteOn, proposal as getProposal } from "../../scripts/lib/dao.ts";
 import { loadDocuments } from "./documents.ts";
 import { checkProposal, verdict, type Finding, type RecipientIn } from "./checks.ts";
+import { parseProposalActions } from "./actions.ts";
 import { verifiedCompletion, extractJson, DEFAULT_MODEL, type Receipt } from "./nearai.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -50,34 +51,31 @@ async function review(id: number) {
   const p = await getProposal(id);
   const fc = p.kind?.FunctionCall;
   if (!fc) throw new Error(`proposal #${id} is not a FunctionCall proposal`);
-  const action = fc.actions[0];
-  const a = JSON.parse(Buffer.from(action.args, "base64").toString());
-  let kind = "";
-  let recipients: RecipientIn[] | undefined;
-  let planId: number | undefined;
-  let fundAmount: string | undefined;
-  let capPerRun: string | undefined;
-  let interval: number | undefined;
-  if (action.method_name === "ft_transfer_call" && a.receiver_id === cfg.contract) {
-    const msg = JSON.parse(a.msg);
-    kind = msg.action;
-    fundAmount = a.amount;
-    if (msg.action === "create_plan") { recipients = msg.plan.recipients; capPerRun = msg.plan.cap_per_run; interval = msg.plan.interval_seconds; }
-    if (msg.action === "fund_plan") planId = msg.plan_id;
-  } else if (fc.receiver_id === cfg.contract) {
-    kind = action.method_name;
-    planId = a.plan_id;
-    if (action.method_name === "update_plan") { recipients = a.update?.recipients; capPerRun = a.update?.cap_per_run; interval = a.update?.interval_seconds; }
-  } else throw new Error(`proposal #${id} does not touch ${cfg.contract}`);
+  // Review every action, not only the first: extra actions (e.g. an ft_transfer to a third party)
+  // must be visible and blocking.
+  const parsed = parseProposalActions({ receiverId: fc.receiver_id, actions: fc.actions ?? [], contract: cfg.contract, token: cfg.token });
+  const findings: Finding[] = [...parsed.findings];
+  for (const act of parsed.actions) {
+    if (act.kind === "unrecognised") continue;
+    const current = act.planId !== undefined ? plans.find((x) => x.id === act.planId) : undefined;
+    if (act.recipients) {
+      findings.push(...checkProposal({ recipients: act.recipients, decimals: meta.decimals, symbol: meta.symbol, capPerRun: act.capPerRun ?? current?.cap_per_run, intervalSeconds: act.interval, previous: current?.recipients, knownAccounts, fundAmount: act.fundAmount, balance: current?.balance }));
+      findings.push(...(await onchainFindings(act.recipients)));
+    } else if (act.kind === "fund_plan" && current) {
+      findings.push(...checkProposal({ recipients: current.recipients, decimals: meta.decimals, symbol: meta.symbol, fundAmount: (BigInt(act.fundAmount ?? "0") + BigInt(current.balance)).toString(), previous: current.recipients }));
+    } else if (act.planId !== undefined && !current) {
+      findings.push({ level: "warn", code: "unknown_plan", message: `action ${act.index + 1} (${act.method}) targets plan #${act.planId}, which the clerk could not find` });
+    }
+  }
+  // Summary fields keep the single-action shape the dashboard reads; `actions` lists all of them.
+  const primary = parsed.actions.find((x) => x.kind !== "unrecognised") ?? parsed.actions[0];
+  const kind = parsed.actions.map((x) => x.kind).join("+");
+  const planId = primary?.planId;
+  const fundAmount = primary?.fundAmount;
   const current = planId !== undefined ? plans.find((x) => x.id === planId) : undefined;
-  const findings: Finding[] = recipients
-    ? checkProposal({ recipients, decimals: meta.decimals, symbol: meta.symbol, capPerRun: capPerRun ?? current?.cap_per_run, intervalSeconds: interval, previous: current?.recipients, knownAccounts, fundAmount, balance: current?.balance })
-    : kind === "fund_plan" && current
-      ? checkProposal({ recipients: current.recipients, decimals: meta.decimals, symbol: meta.symbol, fundAmount: (BigInt(fundAmount ?? "0") + BigInt(current.balance)).toString(), previous: current.recipients })
-      : [];
-  if (recipients) findings.push(...(await onchainFindings(recipients)));
   const facts = {
-    proposal_id: id, status: p.status, proposer: p.proposer, kind, method: action.method_name, receiver: fc.receiver_id, args: a,
+    proposal_id: id, status: p.status, proposer: p.proposer, kind, method: primary?.method, receiver: fc.receiver_id,
+    actions: parsed.actions.map((x) => ({ index: x.index, method: x.method, kind: x.kind, args: x.args })),
     plan_now: current ? { id: current.id, title: current.title, status: current.status, interval_seconds: current.interval_seconds, balance: human(current.balance), recipients: current.recipients.map((r: any) => ({ account_id: r.account_id, amount: human(r.amount) })) } : null,
     token: { symbol: meta.symbol, decimals: meta.decimals },
     deterministic_findings: findings,
@@ -88,7 +86,7 @@ async function review(id: number) {
     maxTokens: 1200,
   });
   const brief = safeBrief(content);
-  const out = { type: "review", proposal_id: id, dao: cfg.dao, contract: cfg.contract, verdict: verdict(findings), findings, facts: { kind, method: action.method_name, plan_id: planId, fund_amount: fundAmount }, brief, model: receipt.model, receipt, at: new Date().toISOString() };
+  const out = { type: "review", proposal_id: id, dao: cfg.dao, contract: cfg.contract, verdict: verdict(findings), findings, facts: { kind, method: primary?.method, plan_id: planId, fund_amount: fundAmount, actions: parsed.actions.map((x) => ({ method: x.method, kind: x.kind, plan_id: x.planId, fund_amount: x.fundAmount })) }, brief, model: receipt.model, receipt, at: new Date().toISOString() };
   save(`proposal-${id}.json`, out);
   print(out);
 }

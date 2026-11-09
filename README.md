@@ -19,7 +19,7 @@ with Trezu's own template engine; no Trezu code is modified.
 Built at NEAR HACKATHON (Nov 2026). Tracks: `social` (Social Money), `realworld` (Real-World Money), `business` (Autonomous Business), `privacy` (Privacy & Private AI).
 
 **Live numbers** (testnet, read from the contract on 2026-11-09 02:45 UTC; `npm run judge` re-reads them):
-4 active plans · 74 paydays run · 207 payouts · 17,035 USDC.e paid · 26 DAO proposals (25 approved, 1 rejected; one filed through Trezu's template engine, one drafted by the clerk, two for the guardian demo) · keeper running from GitHub Actions every 5 minutes · 52 contract tests + 5 clerk tests in CI.
+4 active plans · 74 paydays run · 207 payouts · 17,035 USDC.e paid · 26 DAO proposals (25 approved, 1 rejected; one filed through Trezu's template engine, one drafted by the clerk, two for the guardian demo) · keeper running from GitHub Actions every 5 minutes · 78 tests in CI (53 contract unit, 9 sandbox, 16 clerk), each fix from the Nov 9 security review covered by a regression test.
 
 ![Dashboard](docs/screenshots/desktop.png)
 
@@ -122,7 +122,7 @@ git clone https://github.com/unajijacob6-create/standing-order && cd standing-or
 ./scripts/test.sh
 ```
 
-See: `test result: ok. 43 passed` (unit tests, including verification of a **real signed 1Click quote** against
+See: `test result: ok. 53 passed` (unit tests, including verification of a **real signed 1Click quote** against
 1Click's production key), then three sandbox suites: `native_plans` 5 passed, `ft_plans` 3 passed,
 `routed_payouts` 1 passed. The sandbox tests deploy the contract to a local NEAR node, create and fund
 plans through `ft_transfer_call`, pay recipients, re-credit failed transfers, refuse five forged or
@@ -246,7 +246,9 @@ demo DAO was drafted from them. Details and the exact checks: [clerk/README.md](
 | Method | Who | What |
 |---|---|---|
 | `create_plan(plan)` payable | anyone (owner = caller) | Native-NEAR plans; deposit covers storage, remainder funds the plan. |
-| `ft_on_transfer(sender, amount, msg)` | token contract | `{"action":"create_plan","plan":{…}}` or `{"action":"fund_plan","plan_id":N}`; storage from credits or sponsorship. |
+| `ft_on_transfer(sender, amount, msg)` | allowlisted token contract | `{"action":"create_plan","plan":{…}}` or `{"action":"fund_plan","plan_id":N}`; storage from credits or sponsorship. |
+| `storage_deposit(account_id?)` payable | anyone (≥ 0.00125 NEAR) | Prepays storage for plan creation and for every payout record of plans the account owns. |
+| `set_config(sponsor_storage?, min_interval_seconds?, max_recipients?, oneclick_public_key?, allowed_tokens?)` | contract owner | Limits, sponsorship, 1Click key rotation, token allowlist; emits `config_updated`. |
 | `run_due(plan_id, routes?)` | anyone | Pays the next due period (or continues a split run). `routes` carry signed 1Click quotes for opted-in recipients. |
 | `pause_plan(plan_id)` | plan owner **or a guardian** | Emergency stop; logged with the caller. |
 | `set_guardians(plan_id, accounts)` / `get_guardians` | plan owner / view | Up to 10 accounts that may pause without a vote; also settable as `guardians` in the plan input. |
@@ -254,12 +256,20 @@ demo DAO was drafted from them. Details and the exact checks: [clerk/README.md](
 | `register_destination(asset_id, address)` / `clear_destination()` | recipient | Where cross-chain payouts land. |
 | `get_plans`, `get_plan`, `get_due_plans`, `get_underfunded_plans`, `get_payouts`, `get_route`, `get_destination`, `get_plan_destinations`, `get_config` | view | Everything the dashboard and keeper read. |
 
-Rules enforced on-chain: a run never pays partially; `sum(recipients) ≤ cap_per_run`; `balance` is
-debited when a transfer is dispatched and re-credited if the transfer fails; the schedule stays aligned
+Rules enforced on-chain: a run starts only if the plan can fund it in full, and `sum(recipients) ≤ cap_per_run`;
+`balance` is debited when a transfer is dispatched and re-credited if the transfer fails; the schedule stays aligned
 (`next_run_at += interval`), so missed periods are back-paid one per call unless the council resumes with
-`skip_missed`; a route is accepted only if its 1Click signature verifies **and** origin asset = plan token,
-amount = recipient's payout, destination asset/address = the recipient's own registration, `refundTo` =
-the recipient's NEAR account, and the deposit address is live for at least another minute.
+`skip_missed` (also correct when the pause interrupted a split run); a new plan can start at most one interval in
+the past and intervals are capped at 10 years; recipients in a plan are unique; only tokens on the contract's
+allowlist (`get_config().allowed_tokens`) can fund plans, because any account can call `ft_on_transfer` and claim to
+be a token; payout and route records are paid from the plan owner's storage credits (or sponsored when
+`sponsor_storage` is on), never silently from the balance that holds NEAR plans' funds; `storage_deposit` needs at
+least 0.00125 NEAR; a route is accepted only if its 1Click signature verifies **and** origin asset = plan token,
+amount = recipient's payout, destination asset/address = the recipient's own registration, `refundTo` = the
+recipient's NEAR account, the deposit address is live for at least another minute, **and** that deposit address has
+never been paid before (one signed quote, one payout). If a guardian pauses a plan in the middle of a split run, the
+DAO can still update, sweep or cancel it: the unpaid rest of that run is dropped and a `run_aborted` event records
+how many recipients were and were not paid.
 
 ## Threat model and limits
 

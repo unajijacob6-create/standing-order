@@ -84,6 +84,14 @@ pub fn guardians_set(plan_id: u64, by: &AccountId, guardians: &[AccountId]) {
     emit("guardians_set", json!({"plan_id": plan_id, "by": by, "guardians": guardians}));
 }
 
+pub fn sweep_failed(plan_id: u64, amount: u128, balance: u128) {
+    emit("sweep_failed", json!({"plan_id": plan_id, "amount": amount.to_string(), "balance": balance.to_string()}));
+}
+
+pub fn run_aborted(plan_id: u64, run_index: u32, paid: u32, unpaid: u32) {
+    emit("run_aborted", json!({"plan_id": plan_id, "run_index": run_index, "paid": paid, "unpaid": unpaid}));
+}
+
 pub fn plan_swept(plan_id: u64, to: &AccountId, amount: u128, balance: u128) {
     emit(
         "plan_swept",
@@ -121,12 +129,14 @@ pub struct ConfigSnapshot {
     pub sponsor_storage: bool,
     pub min_interval_seconds: u64,
     pub max_recipients: u32,
+    pub allowed_tokens: Option<Vec<AccountId>>,
 }
 
 impl ConfigSnapshot {
     fn to_json(&self) -> Value {
         json!({
             "oneclick_public_key": self.oneclick_public_key,
+            "allowed_tokens": self.allowed_tokens,
             "sponsor_storage": self.sponsor_storage,
             "min_interval_seconds": self.min_interval_seconds,
             "max_recipients": self.max_recipients,

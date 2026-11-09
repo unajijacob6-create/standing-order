@@ -22,11 +22,19 @@ For every model call (`clerk/src/nearai.ts`):
    it to equal exactly one attested model address from step 1.
 4. The receipt (`model`, `nonce`, hashes, signature, recovered signer, per-check results) is stored next to the review.
 
-Limits, stated plainly: the clerk verifies the signer against the attestation report's addresses and the nonce
-echo; it does not yet replay the TDX event log or call NVIDIA's attestation service (the official
-[verification example](https://github.com/near-examples/nearai-cloud-verification-example) shows that extra step).
-A verified receipt proves *which model, inside an attested enclave, produced this exact answer to this exact
-input*; it does not prove the answer is correct. That is why deterministic checks run regardless.
+`verified = true` additionally requires that the report contains at least one model attestation and that
+every model attestation (and the gateway attestation, when present) echoes our nonce; a missing nonce
+counts as not echoed.
+
+Limits, stated plainly: the clerk checks the signer against the signing addresses the attestation report
+lists and checks the nonce echo. It does **not** verify the Intel TDX quote or the NVIDIA GPU evidence in
+that report (no TDX quote / event-log replay, no call to NVIDIA's attestation service); that hardware-quote
+verification follows NEAR AI's verification docs and the official
+[verification example](https://github.com/near-examples/nearai-cloud-verification-example), and is not done
+by the clerk or offline by `npm run judge`. So a verified receipt shows that the answer to this exact input
+was signed by the key NEAR AI Cloud's attestation report named for this model at the time; that the key
+lives in a genuine enclave rests on the report's hardware quotes, which you verify separately. It never
+proves the answer is correct. That is why deterministic checks run regardless.
 
 ## Deterministic checks (always run, never hidden by the model)
 
@@ -34,6 +42,14 @@ input*; it does not prove the answer is correct. That is why deterministic check
 registration (the transfer would fail), duplicates, decimals slips (USDC has 6 decimals; 100 USDC is
 `100000000` base units), dust, cap below the run total, loose caps, new recipients, raises above 50%,
 cuts below 50%, removed recipients, unknown accounts, runway in runs, leftover funds.
+
+`review` looks at **every action** of the proposal (`clerk/src/actions.ts`), not just the first. It
+recognises `ft_transfer_call` on the plan token to the Standing Order contract with a `create_plan` /
+`fund_plan` msg, and direct calls to the contract (`create_plan`, `fund_plan`, `update_plan`,
+`pause_plan`, `resume_plan`, `cancel_plan`, `sweep`, `set_guardians`). It blocks any other action, any
+`ft_transfer_call` on a different token, and any action that moves tokens to an account other than the
+contract (for example an extra `ft_transfer`). `update_plan` without a recipients list, `sweep`,
+`cancel_plan` and `set_guardians` always produce a warning, so they are never silently `ok`.
 
 On the demo DAO the first draft was **blocked** because the new joiner's account did not exist yet on
 testnet (the payout would have failed); after the account was created the same documents produced

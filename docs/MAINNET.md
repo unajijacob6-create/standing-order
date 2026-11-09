@@ -12,6 +12,9 @@ sub-accounts, keeper gas) plus the USDC you want to pay out (a $5 plan is enough
 2. Deploy: `npx tsx scripts/deploy.ts` (creates nothing; deploy the wasm to `SO_CONTRACT`, which you create as a sub-account first:
    `npx tsx scripts/setup-accounts.ts` creates recipients/keeper; create `so.<you>.near` with 5 NEAR via your wallet or near-cli).
    Register the contract on USDC: `storage_deposit` for `SO_CONTRACT` on the USDC contract (0.00125 NEAR).
+   `scripts/deploy.ts` initialises with `allowed_tokens = [SO_TOKEN]` (only mainnet USDC can fund plans) and
+   `sponsor_storage = true`; for production turn sponsorship off (`set_config`) and have the DAO prepay storage with
+   `storage_deposit` on the Standing Order contract (about 0.0012 NEAR per payout).
 3. Fund a plan. Generate the mainnet Trezu templates for your contract and token first:
    ```bash
    SO_CONTRACT=so.<you>.near SO_TOKEN=17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1 npx tsx trezu-templates/generate.ts mainnet

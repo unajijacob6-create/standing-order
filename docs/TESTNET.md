@@ -117,3 +117,27 @@ Keeper accounts after lockdown (`npm run keeper:lockdown`, then every FullAccess
 Lesson: `near-api-js` gives a function-call key a 0.25 NEAR allowance when none is passed, and once the
 FullAccess key is gone no new key can be added, which is why `keeper2` exists. The allowance only caps
 gas for `run_due`; neither account can do anything else.
+
+## 2026-11-09 (04:23 UTC): security fixes from the code review, contract v4
+
+A three-part review (contract, off-chain code, dashboard) found real bugs; each contract finding was proven with a
+failing test first, then fixed, and each fix has a regression test (`contract/src/tests.rs`, module `review_fixes`).
+Contract redeployed with `migrate` (state v3 → v4); all four plans, payouts, destinations and guardians carried over,
+and `get_config().allowed_tokens` became `["usdc.fakes.testnet"]` automatically. The next payday (plan #3, run 32,
+tx `6dzy138HufWWpoXjFdfXk3dYMpxhfqQSeXpheBhGTXEE`) settled `Sent` for all three recipients on the new code.
+
+| Finding | Fix |
+|---|---|
+| Anyone could call `ft_on_transfer` posing as a token, create plans in a victim's name and spend the victim's storage credits; a fake token whose transfers always fail let a plan grow storage forever | Token allowlist (`allowed_tokens`), payout/route records charged to the plan owner's credits, `storage_deposit` minimum 0.00125 NEAR, creation back pay limited to one interval |
+| A guardian pause in the middle of a split run left the DAO unable to cancel/sweep/update, and `skip_missed` then skipped one extra period | Owner actions abort the interrupted run (`run_aborted` event); `skip_missed` lands on the next aligned slot |
+| One signed 1Click quote could be submitted for several payouts (same deposit address); duplicate recipients allowed | Each deposit address can be paid once; duplicate recipients refused |
+| Huge `interval_seconds` could overflow and brick a split run | Interval capped at 10 years, checked arithmetic |
+| Guardians written at plan creation were not charged for storage; failed token sweeps re-credited without an event | Guardians included in the storage charge; `sweep_failed` event |
+
+Off-chain fixes in the same change: the GitHub Actions keeper now fails (exit 1) when a tick fails instead of
+staying green; an invalid `CROSSCHAIN` value stops the keeper at startup; one failing plan no longer blocks the
+others (retries once without routes); catch-up runs fetch a fresh quote each time; the clerk reviews every action
+in a proposal (a harmless first action can no longer hide an `ft_transfer` to an attacker); `judge` checks only the
+DAO's plans and fails on failed/stuck payouts, and check 6 fails if the receipt signer is missing from today's
+attestation report; ledger CSV cells are protected against spreadsheet formulas. Dashboard fixes are listed in the
+commit message.

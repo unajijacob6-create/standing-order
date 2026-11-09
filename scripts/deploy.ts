@@ -23,7 +23,8 @@ try {
   await owner.callFunction({
     contractId: cfg.contract,
     methodName: "new",
-    args: { owner_id: cfg.master, sponsor_storage: true, min_interval_seconds: Number(process.env.SO_MIN_INTERVAL ?? 60) },
+    // Only the configured token may fund plans: any account can call ft_on_transfer and claim to be a token.
+    args: { owner_id: cfg.master, sponsor_storage: true, min_interval_seconds: Number(process.env.SO_MIN_INTERVAL ?? 60), allowed_tokens: cfg.token ? [cfg.token] : null },
     gas: TGAS(30),
   });
   log("initialised", await view(cfg.contract, "get_config"));

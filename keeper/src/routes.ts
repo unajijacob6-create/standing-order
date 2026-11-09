@@ -78,7 +78,8 @@ export async function quoteRoute(
     info.amountOut = json.quote?.amountOut;
     info.depositAddress = json.quote?.depositAddress;
     info.ok = true;
-    if (mode === "dry") {
+    if (mode !== "live") {
+      // Only live mode routes payouts; any other mode requested a dry (unexecutable) quote.
       log("dry quote", { recipient, amountIn: amount, amountOut: info.amountOut, destination: dest.asset_id });
       return { info };
     }

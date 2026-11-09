@@ -51,17 +51,20 @@ export async function attest(model: string) {
   const r = await fetch(`${NEARAI_BASE_URL}/v1/attestation/report?${params}`, { headers: headers({ "x-no-aliasing": "true" }) });
   if (!r.ok) throw new Error(`attestation ${r.status}: ${(await r.text()).slice(0, 200)}`);
   const report: any = await r.json();
-  const models: any[] = report.model_attestations ?? [];
+  return { nonce, report, summary: summarizeReport(report, nonce) };
+}
+
+/** Pure summary of an attestation report for our nonce. A missing nonce is never "echoed", and an
+ *  empty model_attestations list cannot echo anything (it would make `every` vacuously true). */
+export function summarizeReport(report: any, nonce: string): Receipt["attestation"] {
+  const models: any[] = Array.isArray(report?.model_attestations) ? report.model_attestations : [];
+  const gw = report?.gateway_attestation;
   return {
-    nonce,
-    report,
-    summary: {
-      model_signing_addresses: models.map((m) => String(m.signing_address).toLowerCase()),
-      gateway_signing_address: report.gateway_attestation?.signing_address ? String(report.gateway_attestation.signing_address).toLowerCase() : null,
-      nonce_echoed: models.every((m) => m.request_nonce === nonce) && (report.gateway_attestation?.request_nonce ?? nonce) === nonce,
-      has_intel_quote: models.some((m) => Boolean(m.intel_quote)),
-      has_nvidia_payload: models.some((m) => Boolean(m.nvidia_payload)),
-    },
+    model_signing_addresses: models.map((m) => String(m.signing_address).toLowerCase()),
+    gateway_signing_address: gw?.signing_address ? String(gw.signing_address).toLowerCase() : null,
+    nonce_echoed: models.length > 0 && models.every((m) => typeof m.request_nonce === "string" && m.request_nonce === nonce) && (!gw || gw.request_nonce === nonce),
+    has_intel_quote: models.some((m) => Boolean(m.intel_quote)),
+    has_nvidia_payload: models.some((m) => Boolean(m.nvidia_payload)),
   };
 }
 
@@ -132,6 +135,9 @@ async function completeOnce(model: string, opts: { system: string; user: string;
   let recovered: string | null = null;
   let verified = false;
   let signedBy: Receipt["signed_by"] = "none";
+  // A response is only verified against a report that attests at least one model TEE.
+  const hasModelAttestation = pre.summary.model_signing_addresses.length > 0;
+  if (!hasModelAttestation) checks.push("attestation report contains no model attestation");
   if (signature) {
     const kind = signature.signature_kind;
     const parts = signature.text.split(":");
@@ -147,14 +153,14 @@ async function completeOnce(model: string, opts: { system: string; user: string;
       const signerOk = recovered !== null && pre.summary.model_signing_addresses.filter((a) => a === recovered).length === 1;
       checks.push(textOk ? "signed text = model:sha256(request):sha256(response)" : "signed text does not match our request/response bytes");
       checks.push(signerOk ? "signer matches exactly one attested model TEE" : "signer does not match the preflight model attestation");
-      verified = textOk && signerOk && pre.summary.nonce_echoed;
+      verified = textOk && signerOk && pre.summary.nonce_echoed && hasModelAttestation;
       signedBy = "provider_tee";
     } else if (kind === "gateway") {
       const textOk = signature.text === expectedGatewayText && parts.length === 2;
       const signerOk = recovered !== null && recovered === pre.summary.gateway_signing_address;
       checks.push(textOk ? "signed text = sha256(request):sha256(response)" : "signed text does not match our request/response bytes");
       checks.push(signerOk ? "signer matches the attested gateway TEE" : "signer does not match the gateway attestation");
-      verified = textOk && signerOk && pre.summary.nonce_echoed;
+      verified = textOk && signerOk && pre.summary.nonce_echoed && hasModelAttestation;
       signedBy = "gateway";
     } else {
       checks.push(`unknown signature_kind ${kind}`);

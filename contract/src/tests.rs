@@ -41,7 +41,7 @@ fn input(interval: u64, amounts: &[u128]) -> PlanInput {
 
 fn new_contract() -> Contract {
     testing_env!(ctx(accounts(0), 0, 1_000).build());
-    Contract::new(accounts(0), true, Some(60))
+    Contract::new(accounts(0), true, Some(60), None)
 }
 
 #[test]
@@ -379,7 +379,7 @@ fn only_contract_owner_sets_config() {
     testing_env!(ctx(accounts(0), 0, 1_000).build());
     let old_key = c.get_config().oneclick_public_key;
     let new_key = routes::encode_public_key(&[1u8; 32]);
-    c.set_config(Some(false), Some(10), Some(5), Some(new_key.clone()));
+    c.set_config(Some(false), Some(10), Some(5), Some(new_key.clone()), None);
     let cfg = c.get_config();
     assert!(!cfg.sponsor_storage);
     assert_eq!(cfg.min_interval_seconds, 10);
@@ -405,7 +405,7 @@ fn only_contract_owner_sets_config() {
 fn non_owner_cannot_set_config() {
     let mut c = new_contract();
     testing_env!(ctx(dao(), 0, 1_000).build());
-    c.set_config(Some(false), None, None, None);
+    c.set_config(Some(false), None, None, None, None);
 }
 
 #[test]
@@ -508,7 +508,7 @@ mod routed {
         let mut c = new_contract();
         let signer = SigningKey::generate(&mut rand::rngs::OsRng);
         testing_env!(ctx(accounts(0), 0, 1_000).build());
-        c.set_config(None, None, None, Some(format!("ed25519:{}", bs58::encode(signer.verifying_key().to_bytes()).into_string())));
+        c.set_config(None, None, None, Some(format!("ed25519:{}", bs58::encode(signer.verifying_key().to_bytes()).into_string())), None);
         testing_env!(ctx(recipient(0), NEAR / 10, 1_000).build());
         c.register_destination(BASE_USDC.into(), BASE_ADDR.into());
         testing_env!(ctx(recipient(1), NEAR / 10, 1_000).build());
@@ -623,4 +623,206 @@ fn guardians_can_come_with_the_plan_input() {
     inp.guardians = Some(vec![g.clone()]);
     let id = c.create_plan(inp);
     assert_eq!(c.get_guardians(id), vec![g]);
+}
+
+// ───────────── regression tests for the Nov 9 review findings ─────────────
+mod review_fixes {
+    use super::*;
+    use near_sdk::PromiseError;
+
+    fn signed_route(signer: &ed25519_dalek::SigningKey, origin_asset: &str, amount: u128, refund_to: &str, deposit: &str) -> String {
+        use ed25519_dalek::Signer;
+        use near_sdk::serde_json::json;
+        let request = json!({"dry": false, "swapType": "EXACT_INPUT", "slippageTolerance": 100, "originAsset": origin_asset, "depositType": "ORIGIN_CHAIN",
+            "destinationAsset": "nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near", "amount": amount.to_string(), "refundTo": refund_to,
+            "refundType": "ORIGIN_CHAIN", "recipient": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", "recipientType": "DESTINATION_CHAIN", "deadline": "2026-11-09T06:00:00.000Z"});
+        let quote = json!({"amountIn": amount.to_string(), "amountOut": amount.to_string(), "minAmountOut": amount.to_string(),
+            "deadline": "2026-11-12T06:00:00.000Z", "depositAddress": deposit});
+        let ts = "2026-11-08T20:25:36.811Z";
+        let msg = crate::routes::signed_message(&request, &quote, ts).unwrap();
+        let sig = format!("ed25519:{}", bs58::encode(signer.sign(msg.as_bytes()).to_bytes()).into_string());
+        json!({"quote": quote, "quoteRequest": request, "signature": sig, "timestamp": ts}).to_string()
+    }
+
+    fn panics<F: FnOnce()>(f: F) -> bool {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).is_err()
+    }
+
+    #[test]
+    fn allowlist_blocks_fake_token_plans_and_protects_credits() {
+        let mut c = new_contract();
+        let usdc: AccountId = "usdc.test.near".parse().unwrap();
+        testing_env!(ctx(accounts(0), 0, 1_000).build());
+        c.set_config(Some(false), None, None, None, Some(vec![usdc.clone()]));
+        assert_eq!(c.get_config().allowed_tokens, Some(vec![usdc.clone()]));
+        testing_env!(ctx(dao(), NEAR, 1_000).build());
+        c.storage_deposit(None);
+        let before = c.storage_credit_of(dao()).0;
+        let evil: AccountId = "evil.test.near".parse().unwrap();
+        let mut p = input(3600, &[1]);
+        p.asset = Asset::Ft { contract: evil.clone() };
+        let msg = near_sdk::serde_json::to_string(&FtMessage::CreatePlan { plan: p.clone() }).unwrap();
+        testing_env!(ctx(evil.clone(), 0, 1_000).build());
+        assert!(panics(|| { let _ = c.ft_on_transfer(dao(), U128(1), msg.clone()); }), "fake token must be refused");
+        // Same for a zero-balance token plan created directly and then "funded" by the fake token.
+        testing_env!(ctx(evil.clone(), NEAR, 1_000).build());
+        assert!(panics(|| { c.create_plan(p.clone()); }));
+        assert_eq!(c.storage_credit_of(dao()).0, before);
+        assert!(c.get_plans_by_owner(dao()).is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "Attach at least")]
+    fn storage_deposit_requires_a_minimum() {
+        let mut c = new_contract();
+        testing_env!(ctx(accounts(5), 0, 1_000).build());
+        c.storage_deposit(Some("victim.test.near".parse().unwrap()));
+    }
+
+    #[test]
+    fn payout_storage_is_charged_to_the_plan_owner() {
+        // No credits and no sponsorship: the run is refused instead of eating contract balance.
+        let mut c = new_contract();
+        testing_env!(ctx(accounts(0), 0, 1_000).build());
+        c.set_config(Some(false), None, None, None, None);
+        testing_env!(ctx(dao(), 10 * NEAR, 1_000).build());
+        let id = c.create_plan(input(3600, &[NEAR, NEAR]));
+        testing_env!(ctx(accounts(5), 0, 1_000).build());
+        assert!(panics(|| { c.run_due(id, None); }), "run without storage credits must be refused");
+    }
+
+    #[test]
+    fn payout_storage_comes_out_of_the_owner_credits() {
+        let mut c = new_contract();
+        testing_env!(ctx(accounts(0), 0, 1_000).build());
+        c.set_config(Some(false), None, None, None, None);
+        testing_env!(ctx(dao(), 10 * NEAR, 1_000).build());
+        let id = c.create_plan(input(3600, &[NEAR, NEAR]));
+        testing_env!(ctx(dao(), NEAR / 10, 1_000).build());
+        c.storage_deposit(None);
+        let before = c.storage_credit_of(dao()).0;
+        testing_env!(ctx(accounts(5), 0, 1_000).build());
+        assert!(matches!(c.run_due(id, None), RunOutcome::Sent { completed: true, .. }));
+        let after = c.storage_credit_of(dao()).0;
+        assert!(after < before, "payout records must be paid from the owner's credits ({} -> {})", before, after);
+    }
+
+    #[test]
+    fn creation_back_pay_is_limited_to_one_interval() {
+        let mut c = new_contract();
+        let mut p = input(60, &[1]);
+        p.start_at = Some(0);
+        testing_env!(ctx(dao(), NEAR, 1_000_000).build());
+        assert!(panics(|| { c.create_plan(p.clone()); }));
+        p.start_at = Some(1_000_000 - 30); // within one interval: fine
+        c.create_plan(p);
+    }
+
+    #[test]
+    fn owner_can_cancel_a_plan_paused_mid_run_and_skip_lands_on_the_next_slot() {
+        // Part 1: cancel while paused mid-run is allowed and records the aborted run.
+        let mut c = new_contract();
+        testing_env!(ctx(dao(), 100 * NEAR, 1_000).build());
+        let id = c.create_plan(input(3600, &vec![NEAR / 10; 40]));
+        let mut b = ctx(accounts(5), 0, 1_000);
+        b.prepaid_gas(Gas::from_tgas(80));
+        testing_env!(b.build());
+        c.run_due(id, None);
+        assert!(c.get_plan(id).unwrap().run_cursor.is_some());
+        testing_env!(ctx(dao(), 0, 1_100).build());
+        c.pause_plan(id);
+        c.cancel_plan(id);
+        assert!(get_logs().iter().any(|l| l.contains("run_aborted")));
+        let p = c.get_plan(id).unwrap();
+        assert_eq!(p.status, PlanStatus::Cancelled);
+        assert!(p.run_cursor.is_none());
+
+        // Part 2: resume with skip_missed after a mid-run pause keeps the schedule aligned.
+        let mut c = new_contract();
+        testing_env!(ctx(dao(), 100 * NEAR, 1_000).build());
+        let id = c.create_plan(input(3600, &vec![NEAR / 10; 40]));
+        let mut b = ctx(accounts(5), 0, 1_000);
+        b.prepaid_gas(Gas::from_tgas(80));
+        testing_env!(b.build());
+        c.run_due(id, None);
+        testing_env!(ctx(dao(), 0, 1_100).build());
+        c.pause_plan(id);
+        testing_env!(ctx(dao(), 0, 8_210).build());
+        c.resume_plan(id, Some(true));
+        while c.get_plan(id).unwrap().run_cursor.is_some() {
+            testing_env!(ctx(accounts(5), 0, 8_210).build());
+            c.run_due(id, None);
+        }
+        assert_eq!(c.get_plan(id).unwrap().next_run_at, 11_800, "next payday is the next aligned slot");
+    }
+
+    #[test]
+    fn a_signed_quote_cannot_be_replayed_and_duplicate_recipients_are_refused() {
+        let mut c = new_contract();
+        let signer = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+        testing_env!(ctx(accounts(0), 0, 1_000).build());
+        c.set_config(None, None, None, Some(format!("ed25519:{}", bs58::encode(signer.verifying_key().to_bytes()).into_string())), None);
+        let r0 = recipient(0);
+        testing_env!(ctx(r0.clone(), NEAR / 10, 1_000).build());
+        c.register_destination("nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near".into(), "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045".into());
+        let token: AccountId = accounts(3);
+
+        let mut dup = input(3600, &[100]);
+        dup.recipients.push(Recipient { account_id: r0.clone(), amount: U128(100) });
+        dup.asset = Asset::Ft { contract: token.clone() };
+        testing_env!(ctx(token.clone(), 0, 1_000).build());
+        let dup_msg = near_sdk::serde_json::to_string(&FtMessage::CreatePlan { plan: dup }).unwrap();
+        assert!(panics(|| { let _ = c.ft_on_transfer(dao(), U128(1000), dup_msg.clone()); }), "duplicate recipient must be refused");
+
+        let mut p = input(3600, &[100]);
+        p.asset = Asset::Ft { contract: token.clone() };
+        testing_env!(ctx(token.clone(), 0, 1_000).build());
+        let _ = c.ft_on_transfer(dao(), U128(1000), near_sdk::serde_json::to_string(&FtMessage::CreatePlan { plan: p }).unwrap());
+        let q = signed_route(&signer, &format!("nep141:{}", token), 100, r0.as_str(), "702bb1cdf6e6d1f80776679b6e0f2745226efd76cda7563fe0f45ee1d1929d87");
+        let routes = vec![QuotedRoute { recipient: r0.clone(), quote: q }];
+        testing_env!(ctx(accounts(5), 0, 1_000).build());
+        c.run_due(1, Some(routes.clone()));
+        testing_env!(ctx(accounts(5), 0, 4_600).build());
+        assert!(panics(|| { c.run_due(1, Some(routes.clone())); }), "the same deposit address must not be paid twice");
+        // A fresh quote (new deposit address) works.
+        let q2 = signed_route(&signer, &format!("nep141:{}", token), 100, r0.as_str(), "0b0f1ee3d1e0c0ffee0000000000000000000000000000000000000000000001");
+        testing_env!(ctx(accounts(5), 0, 4_600).build());
+        assert!(matches!(c.run_due(1, Some(vec![QuotedRoute { recipient: r0.clone(), quote: q2 }])), RunOutcome::Sent { .. }));
+    }
+
+    #[test]
+    fn oversized_intervals_are_refused() {
+        let mut c = new_contract();
+        testing_env!(ctx(dao(), 100 * NEAR, 1_000).build());
+        assert!(panics(|| { c.create_plan(input(u64::MAX - 10, &[NEAR])); }));
+        let id = c.create_plan(input(3600, &[NEAR]));
+        assert!(panics(|| c.update_plan(id, PlanUpdate { interval_seconds: Some(u64::MAX), ..Default::default() })));
+    }
+
+    #[test]
+    fn guardian_storage_is_included_in_the_creation_charge() {
+        let mut c = new_contract();
+        let mut inp = input(3600, &[NEAR]);
+        inp.guardians = Some((0..10).map(|i| format!("{}{}.test.near", "g".repeat(50), i).parse().unwrap()).collect());
+        testing_env!(ctx(dao(), 5 * NEAR, 1_000).build());
+        let s0 = env::storage_usage();
+        let id = c.create_plan(inp);
+        let charged = 5 * NEAR - c.get_plan(id).unwrap().balance.0;
+        c.guardians.flush();
+        let written = env::storage_usage() - s0;
+        assert_eq!(charged / env::storage_byte_cost().as_yoctonear(), written as u128, "every byte written is charged");
+    }
+
+    #[test]
+    fn failed_sweep_emits_an_event() {
+        let mut c = new_contract();
+        let token: AccountId = accounts(3);
+        let mut p = input(3600, &[100]);
+        p.asset = Asset::Ft { contract: token.clone() };
+        testing_env!(ctx(token.clone(), 0, 1_000).build());
+        let _ = c.ft_on_transfer(dao(), U128(1000), near_sdk::serde_json::to_string(&FtMessage::CreatePlan { plan: p }).unwrap());
+        testing_env!(ctx(accounts(0), 0, 1_000).build());
+        c.on_sweep(1, U128(400), Err(PromiseError::Failed));
+        assert!(get_logs().iter().any(|l| l.contains("sweep_failed")));
+    }
 }

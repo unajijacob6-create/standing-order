@@ -9,7 +9,7 @@ pub mod routes;
 pub mod types;
 
 use near_sdk::json_types::U128;
-use near_sdk::store::{IterableMap, LookupMap};
+use near_sdk::store::{IterableMap, LookupMap, LookupSet};
 use near_sdk::{
     env, ext_contract, log, near, require, AccountId, BorshStorageKey, Gas, NearToken,
     PanicOnDefault, Promise, PromiseError, PromiseOrValue,
@@ -28,6 +28,10 @@ const GAS_ROUTE_VERIFY: Gas = Gas::from_tgas(15);
 /// Gas kept back after the last payout of a call for bookkeeping.
 const GAS_RESERVE: Gas = Gas::from_tgas(20);
 const ONE_YOCTO: NearToken = NearToken::from_yoctonear(1);
+/// Longest allowed interval (10 years); keeps schedule arithmetic far from overflow.
+const MAX_INTERVAL_SECONDS: u64 = 10 * 365 * 24 * 3600;
+/// Smallest storage_deposit accepted (the NEP-145 convention of 0.00125 NEAR).
+const MIN_STORAGE_DEPOSIT: u128 = 1_250_000_000_000_000_000_000;
 
 #[ext_contract(ext_ft)]
 pub trait FungibleToken {
@@ -44,11 +48,12 @@ enum StorageKey {
     Destinations,
     Routes,
     Guardians,
+    UsedDepositAddresses,
 }
 
-/// State layout before cross-chain routes (v0.1). Used by `migrate`.
+/// State layout before the token allowlist and quote-replay guard (v0.3). Used by `migrate`.
 #[near(serializers = [borsh])]
-pub struct ContractV2 {
+pub struct ContractV3 {
     owner_id: AccountId,
     plans: IterableMap<u64, Plan>,
     plans_by_owner: LookupMap<AccountId, Vec<u64>>,
@@ -61,6 +66,7 @@ pub struct ContractV2 {
     destinations: LookupMap<AccountId, Destination>,
     routes: LookupMap<(u64, u32), RouteRecord>,
     oneclick_public_key: [u8; 32],
+    guardians: LookupMap<u64, Vec<AccountId>>,
 }
 
 #[near(contract_state)]
@@ -88,12 +94,17 @@ pub struct Contract {
     /// Accounts the plan owner (the DAO) lets pause a plan without a vote: an emergency kill
     /// switch. Only the owner can resume, update, cancel or sweep.
     guardians: LookupMap<u64, Vec<AccountId>>,
+    /// Token contracts that may fund plans. `None` accepts any token (local testing only); the
+    /// live deployments set it, because any account can call `ft_on_transfer` and claim to be a token.
+    allowed_tokens: Option<Vec<AccountId>>,
+    /// 1Click deposit addresses already paid, so one signed quote can never be used twice.
+    used_deposit_addresses: LookupSet<AccountId>,
 }
 
 #[near]
 impl Contract {
     #[init]
-    pub fn new(owner_id: AccountId, sponsor_storage: bool, min_interval_seconds: Option<u64>) -> Self {
+    pub fn new(owner_id: AccountId, sponsor_storage: bool, min_interval_seconds: Option<u64>, allowed_tokens: Option<Vec<AccountId>>) -> Self {
         Self {
             owner_id,
             plans: IterableMap::new(StorageKey::Plans),
@@ -108,6 +119,8 @@ impl Contract {
             routes: LookupMap::new(StorageKey::Routes),
             oneclick_public_key: routes::decode_public_key(routes::ONE_CLICK_MANAGER_PUB_KEY).expect("key"),
             guardians: LookupMap::new(StorageKey::Guardians),
+            allowed_tokens,
+            used_deposit_addresses: LookupSet::new(StorageKey::UsedDepositAddresses),
         }
     }
 
@@ -115,7 +128,16 @@ impl Contract {
     #[private]
     #[init(ignore_state)]
     pub fn migrate() -> Self {
-        let old: ContractV2 = env::state_read().expect("no previous state");
+        let old: ContractV3 = env::state_read().expect("no previous state");
+        // Allow exactly the tokens existing plans already use, so nothing live breaks.
+        let mut tokens: Vec<AccountId> = Vec::new();
+        for (_, plan) in old.plans.iter() {
+            if let Asset::Ft { contract } = &plan.asset {
+                if !tokens.contains(contract) {
+                    tokens.push(contract.clone());
+                }
+            }
+        }
         Self {
             owner_id: old.owner_id,
             plans: old.plans,
@@ -129,7 +151,9 @@ impl Contract {
             destinations: old.destinations,
             routes: old.routes,
             oneclick_public_key: old.oneclick_public_key,
-            guardians: LookupMap::new(StorageKey::Guardians),
+            guardians: old.guardians,
+            allowed_tokens: Some(tokens),
+            used_deposit_addresses: LookupSet::new(StorageKey::UsedDepositAddresses),
         }
     }
 
@@ -221,6 +245,7 @@ impl Contract {
         if !routes.is_empty() {
             gas_per_payout = Gas::from_gas(gas_per_payout.as_gas() + GAS_ROUTE_VERIFY.as_gas());
         }
+        let storage_before = env::storage_usage();
         let run_index = plan.runs_completed;
         let len = plan.recipients.len() as u32;
         let mut cursor = plan.run_cursor.unwrap_or(0);
@@ -245,6 +270,7 @@ impl Contract {
             let seq = plan.payout_count;
             plan.payout_count += 1;
             if let Some(r) = &route {
+                require!(self.used_deposit_addresses.insert(r.deposit_address.clone()), "Route deposit address was already used; fetch a fresh quote");
                 self.routes.insert((plan_id, seq), r.clone());
                 events::payout_routed(plan_id, seq, &recipient.account_id, &r.deposit_address, &r.destination_asset, &r.destination_address, r.amount_out.0);
             }
@@ -271,13 +297,19 @@ impl Contract {
         if completed {
             plan.run_cursor = None;
             plan.runs_completed += 1;
-            plan.next_run_at += plan.interval_seconds;
+            plan.next_run_at = plan.next_run_at.checked_add(plan.interval_seconds).expect("schedule overflow");
             events::run_completed(plan_id, run_index, total, plan.next_run_at, plan.balance.0);
         } else {
             plan.run_cursor = Some(cursor);
         }
         plan.updated_at = now;
+        let owner = plan.owner.clone();
         self.plans.insert(plan_id, plan);
+        // Payout and route records are paid for by the plan owner's storage credits (or sponsored),
+        // never silently out of the contract balance that holds NEAR plans' funds.
+        self.routes.flush();
+        let cost = self.storage_cost_since(storage_before);
+        self.charge_storage(&owner, cost);
 
         RunOutcome::Sent { run_index, sent, remaining: len - cursor, completed }
     }
@@ -328,7 +360,12 @@ impl Contract {
         plan.status = PlanStatus::Active;
         if skip_missed.unwrap_or(false) && now >= plan.next_run_at {
             let periods = (now - plan.next_run_at) / plan.interval_seconds + 1;
-            plan.next_run_at += periods * plan.interval_seconds;
+            let target = periods
+                .checked_mul(plan.interval_seconds)
+                .and_then(|d| plan.next_run_at.checked_add(d))
+                .expect("schedule overflow");
+            // If a run was interrupted by the pause, finishing it adds one interval, so aim one short.
+            plan.next_run_at = if plan.run_cursor.is_some() { target - plan.interval_seconds } else { target };
         }
         plan.updated_at = now;
         events::plan_status("plan_resumed", plan_id, &by);
@@ -369,11 +406,14 @@ impl Contract {
         let by = env::predecessor_account_id();
         self.owned_plan_mut(&plan_id);
         Self::validate_guardians(&guardians);
+        let before = env::storage_usage();
         if guardians.is_empty() {
             self.guardians.remove(&plan_id);
         } else {
             self.guardians.insert(plan_id, guardians.clone());
         }
+        let cost = self.storage_cost_since(before);
+        self.charge_storage(&by, cost);
         events::guardians_set(plan_id, &by, &guardians);
     }
 
@@ -410,8 +450,10 @@ impl Contract {
         {
             let plan = self.owned_plan_mut(&plan_id);
             require!(plan.status != PlanStatus::Cancelled, "Plan is cancelled");
+            Self::abort_run_if_paused(plan_id, plan);
             require!(plan.run_cursor.is_none(), "Cannot update a plan mid-run");
             if let Some(title) = update.title {
+                require!(title.len() <= 120, "Title too long");
                 plan.title = title;
             }
             if let Some(recipients) = update.recipients {
@@ -423,6 +465,7 @@ impl Contract {
             }
             if let Some(interval) = update.interval_seconds {
                 require!(interval >= min_interval, "interval_seconds below minimum");
+                require!(interval <= MAX_INTERVAL_SECONDS, "interval_seconds above maximum");
                 plan.interval_seconds = interval;
             }
             if update.clear_end_at.unwrap_or(false) {
@@ -447,6 +490,7 @@ impl Contract {
         {
             let plan = self.owned_plan_mut(&plan_id);
             require!(plan.status != PlanStatus::Cancelled, "Plan is already cancelled");
+            Self::abort_run_if_paused(plan_id, plan);
             require!(plan.run_cursor.is_none(), "Cannot cancel a plan mid-run");
             plan.status = PlanStatus::Cancelled;
             plan.updated_at = Self::now();
@@ -459,6 +503,7 @@ impl Contract {
     pub fn sweep(&mut self, plan_id: u64, amount: Option<U128>) -> Option<Promise> {
         {
             let plan = self.owned_plan_mut(&plan_id);
+            Self::abort_run_if_paused(plan_id, plan);
             require!(plan.run_cursor.is_none(), "Cannot sweep a plan mid-run");
         }
         self.sweep_internal(plan_id, amount.map(|a| a.0))
@@ -469,8 +514,9 @@ impl Contract {
     pub fn on_sweep(&mut self, plan_id: u64, amount: U128, #[callback_result] result: Result<(), PromiseError>) {
         if result.is_err() {
             let plan = self.plans.get_mut(&plan_id).expect("plan");
-            plan.balance = U128(plan.balance.0 + amount.0);
-            log!("Sweep of {} for plan {} failed; balance restored", amount.0, plan_id);
+            plan.balance = U128(plan.balance.0.checked_add(amount.0).expect("overflow"));
+            let balance = plan.balance.0;
+            events::sweep_failed(plan_id, amount.0, balance);
         }
     }
 
@@ -516,6 +562,7 @@ impl Contract {
     pub fn storage_deposit(&mut self, account_id: Option<AccountId>) -> U128 {
         let account = account_id.unwrap_or_else(env::predecessor_account_id);
         let amount = env::attached_deposit().as_yoctonear();
+        require!(amount >= MIN_STORAGE_DEPOSIT, format!("Attach at least {} yoctoNEAR", MIN_STORAGE_DEPOSIT));
         let current = self.storage_credits.get(&account).copied().unwrap_or(0);
         let updated = current + amount;
         self.storage_credits.insert(account.clone(), updated);
@@ -529,7 +576,7 @@ impl Contract {
 
     // ───────────────────────────── admin ─────────────────────────────
 
-    pub fn set_config(&mut self, sponsor_storage: Option<bool>, min_interval_seconds: Option<u64>, max_recipients: Option<u32>, oneclick_public_key: Option<String>) {
+    pub fn set_config(&mut self, sponsor_storage: Option<bool>, min_interval_seconds: Option<u64>, max_recipients: Option<u32>, oneclick_public_key: Option<String>, allowed_tokens: Option<Vec<AccountId>>) {
         let by = env::predecessor_account_id();
         require!(by == self.owner_id, "Only the contract owner");
         let old = self.config_snapshot();
@@ -545,6 +592,9 @@ impl Contract {
         if let Some(v) = max_recipients {
             self.max_recipients = v;
         }
+        if let Some(v) = allowed_tokens {
+            self.allowed_tokens = Some(v);
+        }
         events::config_updated(&by, &old, &self.config_snapshot());
     }
 
@@ -554,6 +604,7 @@ impl Contract {
             sponsor_storage: self.sponsor_storage,
             min_interval_seconds: self.min_interval_seconds,
             max_recipients: self.max_recipients,
+            allowed_tokens: self.allowed_tokens.clone(),
         }
     }
 
@@ -567,6 +618,7 @@ impl Contract {
             max_recipients: self.max_recipients,
             plan_count: self.next_plan_id - 1,
             oneclick_public_key: routes::encode_public_key(&self.oneclick_public_key),
+            allowed_tokens: self.allowed_tokens.clone(),
         }
     }
 
@@ -637,6 +689,7 @@ impl Contract {
         self.plans.flush();
         self.plans_by_owner.flush();
         self.payouts.flush();
+        self.guardians.flush();
         let after = env::storage_usage();
         let used = after.saturating_sub(before);
         env::storage_byte_cost().as_yoctonear() * used as u128
@@ -667,6 +720,23 @@ impl Contract {
         plan
     }
 
+    /// A plan paused in the middle of a split run would otherwise be stuck: the owner could not
+    /// cancel, sweep or update it without first resuming (and paying the rest of the run). When the
+    /// owner acts on such a plan, the unpaid remainder of that run is dropped, the period counts as
+    /// done (recipients already paid are not paid twice), and a `run_aborted` event records it.
+    fn abort_run_if_paused(plan_id: u64, plan: &mut Plan) {
+        if plan.status != PlanStatus::Paused {
+            return;
+        }
+        let Some(cursor) = plan.run_cursor else { return };
+        let len = plan.recipients.len() as u32;
+        let run_index = plan.runs_completed;
+        plan.run_cursor = None;
+        plan.runs_completed += 1;
+        plan.next_run_at = plan.next_run_at.checked_add(plan.interval_seconds).expect("schedule overflow");
+        events::run_aborted(plan_id, run_index, cursor, len - cursor);
+    }
+
     fn validate_guardians(guardians: &[AccountId]) {
         require!(guardians.len() <= 10, "At most 10 guardians");
         for (i, g) in guardians.iter().enumerate() {
@@ -677,8 +747,9 @@ impl Contract {
     fn validate_recipients(recipients: &[Recipient], max_recipients: u32) {
         require!(!recipients.is_empty(), "At least one recipient is required");
         require!(recipients.len() as u32 <= max_recipients, "Too many recipients");
-        for r in recipients {
+        for (i, r) in recipients.iter().enumerate() {
             require!(r.amount.0 > 0, "Recipient amount must be positive");
+            require!(!recipients[..i].iter().any(|o| o.account_id == r.account_id), "Duplicate recipient");
         }
     }
 
@@ -689,9 +760,16 @@ impl Contract {
             input.interval_seconds >= self.min_interval_seconds,
             format!("interval_seconds must be at least {}", self.min_interval_seconds)
         );
+        require!(input.interval_seconds <= MAX_INTERVAL_SECONDS, "interval_seconds above maximum");
         require!(input.title.len() <= 120, "Title too long");
+        if let (Asset::Ft { contract }, Some(allowed)) = (&input.asset, &self.allowed_tokens) {
+            require!(allowed.contains(contract), "Token is not on this contract's allowlist");
+        }
         let now = Self::now();
         let next_run_at = input.start_at.unwrap_or(now);
+        // At most one period of back pay at creation; a start date years in the past would
+        // otherwise make thousands of periods due at once.
+        require!(next_run_at.saturating_add(input.interval_seconds) >= now, "start_at is more than one interval in the past");
         if let Some(end) = input.end_at {
             require!(end >= next_run_at, "end_at is before the first run");
         }
