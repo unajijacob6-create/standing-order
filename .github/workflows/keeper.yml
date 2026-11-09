@@ -4,6 +4,7 @@
 # contract (the keeper refuses to start with anything broader). If it ever leaked, the worst a
 # holder could do is make a payment that is already due happen on time. That is why it is safe
 # to keep in CI. GitHub may delay scheduled runs; the keeper catches up a few periods per run.
+# Schedules register when this file is pushed to the default branch.
 name: keeper
 
 on:
