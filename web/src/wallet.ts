@@ -2,6 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { NearConnector } from "@hot-labs/near-connect";
 import { CONTRACT, NETWORK } from "./config";
 
+/** Did the user dismiss the wallet picker or reject the request in their wallet (as opposed to a real failure)? */
+export function isCancellation(e: unknown): boolean {
+  const m = String((e as any)?.message ?? e ?? "");
+  return /reject|cancel|closed/i.test(m);
+}
+
 export function useWallet() {
   const connector = useMemo(() => new NearConnector({ network: NETWORK }), []);
   const [accountId, setAccountId] = useState<string>("");
@@ -37,11 +43,20 @@ export function useWallet() {
     };
   }, [connector]);
 
-  const signIn = useCallback(async () => {
-    const w: any = await connector.connect();
+  /** Opens the wallet picker. Resolves true once connected, false if the user dismissed it; real errors still throw. */
+  const signIn = useCallback(async (): Promise<boolean> => {
+    let w: any;
+    try {
+      w = await connector.connect();
+    } catch (e) {
+      if (isCancellation(e)) return false;
+      throw e;
+    }
+    if (!w) return false;
     setWallet(w);
     const accounts = await w.getAccounts();
     setAccountId(accounts?.[0]?.accountId ?? "");
+    return Boolean(accounts?.[0]?.accountId);
   }, [connector]);
 
   const signOut = useCallback(async () => {

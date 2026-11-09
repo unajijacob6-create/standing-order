@@ -171,6 +171,9 @@ p { margin: 0; }
 .kv .k { color: var(--ink-3); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
 .kv .v { font-family: var(--font-mono); font-size: 13.5px; overflow-wrap: anywhere; }
 .table-wrap { overflow-x: auto; }
+/* Payout history scrolls sideways on phones instead of wrapping account names one character per line. */
+table.payouts { min-width: 660px; }
+table.payouts td { overflow-wrap: normal; }
 table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 th { text-align: left; color: var(--ink-3); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; padding: 8px 10px; border-bottom: 1px solid var(--line); }
 td { padding: 10px; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
@@ -269,10 +272,12 @@ select option { color: #000; }
   .header .wrap { gap: 8px; }
   .header .pill.keeper .text-sm { display: inline; font-family: var(--font-mono); font-size: 12px; }
   .coins { height: 240px; }
-  .req { grid-template-columns: 44px minmax(0, 1fr); }
-  .req .status { grid-column: 2; justify-content: flex-start !important; flex-wrap: wrap; }
 }
 @media (prefers-reduced-motion: reduce) { .feed li.fresh .feed-dot, .glyphs span { animation: none; } html { scroll-behavior: auto; } }
 :root[data-theme="light"] .hero h1 .accent-word { color: #0b8f62; text-shadow: none; }
 :root[data-theme="light"] .metric .value.due, :root[data-theme="light"] .ok-text, :root[data-theme="light"] .step .n { color: #0b8f62; text-shadow: none; }
 .nowrap { white-space: nowrap; }
+
+/* Status chips sit under the request text at every width: the Requests panel is a narrow column even on desktop. */
+.req { grid-template-columns: 44px minmax(0, 1fr); }
+.req .status { grid-column: 2; justify-content: flex-start !important; flex-wrap: wrap; }

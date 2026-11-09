@@ -2,17 +2,24 @@ import { useEffect, useState } from "react";
 import type { Destination } from "../near";
 import { getDestination } from "../near";
 import { DESTINATIONS, destinationLabel } from "../config";
+import { validateDestination } from "../address";
+import { isCancellation } from "../wallet";
 
 export function DestinationPanel({ accountId, connected, onSignIn, onSignOut, call }: { accountId: string; connected: boolean; onSignIn: () => Promise<void>; onSignOut: () => Promise<void>; call: (m: string, a: Record<string, unknown>, deposit?: string, gas?: string) => Promise<any> }) {
   const [dest, setDest] = useState<Destination | null>(null);
   const [asset, setAsset] = useState(DESTINATIONS[0].id);
   const [address, setAddress] = useState("");
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [msg, setMsg] = useState<{ ok: boolean | null; text: string } | null>(null); // ok null = neutral (cancelled)
+  const chain = DESTINATIONS.find((d) => d.id === asset)?.chain ?? "";
+  const addrError = address.trim() ? validateDestination(chain, address) : null;
+  const canSave = !busy && address.trim() !== "" && addrError === null;
+  const fail = (e: unknown) =>
+    setMsg(isCancellation(e) ? { ok: null, text: "Cancelled in your wallet. Nothing was sent." } : { ok: false, text: String((e as any)?.message ?? e).slice(0, 200) });
 
   const refresh = async () => {
     if (!accountId) return setDest(null);
-    setDest(await getDestination(accountId));
+    setDest(await getDestination(accountId).catch(() => null));
   };
   useEffect(() => {
     refresh();
@@ -20,6 +27,8 @@ export function DestinationPanel({ accountId, connected, onSignIn, onSignOut, ca
   }, [accountId]);
 
   const save = async () => {
+    const err = validateDestination(chain, address);
+    if (err) return setMsg({ ok: false, text: err });
     setBusy(true);
     setMsg(null);
     try {
@@ -28,7 +37,7 @@ export function DestinationPanel({ accountId, connected, onSignIn, onSignOut, ca
       setAddress("");
       await refresh();
     } catch (e) {
-      setMsg({ ok: false, text: String((e as any)?.message ?? e).slice(0, 200) });
+      fail(e);
     } finally {
       setBusy(false);
     }
@@ -41,7 +50,7 @@ export function DestinationPanel({ accountId, connected, onSignIn, onSignOut, ca
       setMsg({ ok: true, text: "Cleared. You will be paid on NEAR again." });
       await refresh();
     } catch (e) {
-      setMsg({ ok: false, text: String((e as any)?.message ?? e).slice(0, 200) });
+      fail(e);
     } finally {
       setBusy(false);
     }
@@ -81,13 +90,14 @@ export function DestinationPanel({ accountId, connected, onSignIn, onSignOut, ca
           </label>
           <label>
             Your address on that chain
-            <input value={address} onChange={(e) => setAddress(e.target.value)} placeholder={asset.includes("sol-") ? "Solana address" : "0x…"} spellCheck={false} />
+            <input value={address} onChange={(e) => setAddress(e.target.value)} placeholder={chain === "Solana" ? "Solana address (base58)" : "0x… (40 hex characters)"} spellCheck={false} autoComplete="off" aria-invalid={addrError !== null} aria-describedby="dest-addr-err" />
           </label>
+          {addrError && <div id="dest-addr-err" className="tiny err-text" role="alert">{addrError}</div>}
           <div className="row">
-            <button className="btn accent" onClick={save} disabled={busy || address.trim().length < 20}>{busy ? "Signing…" : dest ? "Update destination" : "Register destination"}</button>
+            <button className="btn accent" onClick={save} disabled={!canSave}>{busy ? "Signing…" : dest ? "Update destination" : "Register destination"}</button>
             <span className="tiny">Costs ≈0.01 NEAR of storage, refunded if less is used.</span>
           </div>
-          {msg && <div className={msg.ok ? "ok-text" : "err-text"}>{msg.text}</div>}
+          {msg && <div className={msg.ok === null ? "muted" : msg.ok ? "ok-text" : "err-text"}>{msg.text}</div>}
         </div>
       )}
     </div>

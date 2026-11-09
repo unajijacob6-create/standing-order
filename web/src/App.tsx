@@ -1,17 +1,18 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Logo } from "./components/Logo";
 import { PlanCard } from "./components/PlanCard";
 import { PlanDetail } from "./components/PlanDetail";
 import { Requests } from "./components/Requests";
 import { DestinationPanel } from "./components/DestinationPanel";
-import { LiveFeed, ago, useRecentPayouts } from "./components/LiveFeed";
+import { LiveFeed, ago, usePaidOut, useRecentPayouts } from "./components/LiveFeed";
 import { Coins3D } from "./components/Coins3D";
 import { Particles } from "./components/Particles";
 import { ClerkPanel, useClerkReviews } from "./components/ClerkPanel";
-import { CONTRACT, DAO, EXPLORER, KEEPER_URL, NETWORK, REPO_URL } from "./config";
-import { formatAmount, formatCountdown, sum } from "./format";
+import { CONTRACT, DAO, EXPLORER, KEEPER_URL, NETWORK, REPO_URL, TOKEN } from "./config";
+import { formatCountdown, sum } from "./format";
+import { assetInfo, formatAsset, isConfiguredToken, useTokenMetas } from "./assets";
 import { getDaoProposals, getPlans, getTokenBalance, getTokenMeta, type Plan, type Proposal, type TokenMeta } from "./near";
-import { useWallet } from "./wallet";
+import { isCancellation, useWallet } from "./wallet";
 
 interface KeeperStatus {
   ok: boolean;
@@ -101,40 +102,53 @@ export default function App() {
   // run_due is permissionless: any connected testnet account can make a due payday happen.
   const trigger = async (planId: number) => {
     setToast(null);
+    const cancelled = () => setToast({ tone: "neutral", text: "Cancelled in your wallet. Nothing was sent." });
     try {
-      if (!wallet.connected) await wallet.signIn();
+      if (!wallet.connected && !(await wallet.signIn())) return cancelled();
       setTriggering(planId);
       await wallet.call("run_due", { plan_id: planId, routes: null }, "0", "300000000000000");
       setToast({ tone: "ok", text: `Payday for plan #${planId} triggered. Payouts appear below in a few seconds.` });
       setTimeout(() => setRefresh((r) => r + 1), 2500);
     } catch (e) {
-      const message = String((e as any)?.message ?? e);
-      // near-connect throws "User rejected" (picker closed) and "Wallet closed" (wallet window closed).
-      if (/reject|cancel|closed/i.test(message)) {
-        setToast({ tone: "neutral", text: "Cancelled in your wallet. Nothing was sent." });
-      } else {
-        setToast({ tone: "err", text: `Couldn’t trigger payday: ${message}`.slice(0, 200) });
-      }
+      if (isCancellation(e)) cancelled();
+      else setToast({ tone: "err", text: `Couldn't trigger payday: ${String((e as any)?.message ?? e).slice(0, 200)}` });
     } finally {
       setTriggering(null);
     }
   };
 
+  // Header / panel "Connect": closing the picker is not an error; a real failure shows a toast.
+  const connect = async () => {
+    try {
+      await wallet.signIn();
+    } catch (e) {
+      if (!isCancellation(e)) setToast({ tone: "err", text: `Couldn't connect a wallet: ${String((e as any)?.message ?? e).slice(0, 200)}` });
+    }
+  };
+
+  const metas = useTokenMetas(plans, meta);
+  const tokenInfo = assetInfo({ Ft: { contract: TOKEN } }, metas);
+  // Headline stats are in the configured token only: anyone can create a plan on the contract, in NEAR or any FT, and
+  // those amounts are not comparable (different decimals, different value).
+  const tokenPlans = plans.filter(isConfiguredToken);
+  const otherPlans = plans.length - tokenPlans.length;
+  const paid = usePaidOut(plans);
   const feed = useRecentPayouts(plans);
   const reviews = useClerkReviews();
   const lastPayout = feed[0]?.timestamp;
   const active = plans.filter((p) => p.status === "Active");
-  const totalPaid = useMemo(() => {
-    // Sum of completed runs × per-run total, per plan (payout records are per plan; this is the aggregate).
-    return plans.filter((p) => p.asset !== "Near").reduce((acc, p) => acc + BigInt(p.runs_completed) * sum(p.recipients.map((r) => r.amount)), 0n);
-  }, [plans]);
+  // Until every payout record has been read once, fall back to runs × per-run total (an upper bound: failed transfers are re-credited).
+  const estimatedPaid = tokenPlans.reduce((acc, p) => acc + BigInt(p.runs_completed) * sum(p.recipients.map((r) => r.amount)), 0n);
+  const totalPaid = paid.total ?? estimatedPaid;
   // Next payday counts only plans the keeper can actually pay: active, not past end_at, and funded for at least one run
   // (an underfunded plan shows "Needs top-up" on its card instead of a countdown).
   const nextRun = active
     .filter((p) => !(p.end_at !== null && p.next_run_at > p.end_at) && BigInt(p.balance) >= sum(p.recipients.map((r) => r.amount)))
     .map((p) => p.next_run_at)
     .sort((a, b) => a - b)[0];
-  const committed = active.reduce((acc, p) => acc + BigInt(p.balance), 0n);
+  // Paused plans still hold their funds; cancelled ones have returned them.
+  const committed = tokenPlans.filter((p) => p.status !== "Cancelled").reduce((acc, p) => acc + BigInt(p.balance), 0n);
+  const otherNote = otherPlans > 0 ? ` · + ${otherPlans} plan${otherPlans === 1 ? "" : "s"} in other assets not counted` : "";
   const selectedPlan = plans.find((p) => p.id === selected) ?? null;
   const keeperFresh = keeper?.lastTick ? Date.now() - new Date(keeper.lastTick).getTime() < 120_000 : false;
 
@@ -175,7 +189,7 @@ export default function App() {
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /></svg>
             )}
           </button>
-          {wallet.connected ? <button className="btn ghost sm" onClick={wallet.signOut}>{wallet.accountId.length > 22 ? wallet.accountId.slice(0, 20) + "…" : wallet.accountId}</button> : <button className="btn sm" onClick={wallet.signIn}>Connect</button>}
+          {wallet.connected ? <button className="btn ghost sm" onClick={wallet.signOut}>{wallet.accountId.length > 22 ? wallet.accountId.slice(0, 20) + "…" : wallet.accountId}</button> : <button className="btn sm" onClick={connect}>Connect</button>}
         </div>
       </header>
 
@@ -192,12 +206,12 @@ export default function App() {
             </p>
             <div className="cta">
               <a className="btn" href="#live">Watch live payouts</a>
-              <a className="btn ghost" href={REPO_URL} target="_blank" rel="noreferrer">Read the code ↗</a>
+              <a className="btn ghost" href={`${REPO_URL}#0-one-command-verification-no-keys-no-funds-about-20-s`} target="_blank" rel="noreferrer">Verify it yourself ↗</a>
             </div>
             <div className="proof">
               <a className="pill" href={`${EXPLORER}/address/${CONTRACT}`} target="_blank" rel="noreferrer"><span className="dot" style={{ background: "var(--green)" }} />Contract on {NETWORK}</a>
               <a className="pill" href={`${EXPLORER}/address/${DAO}`} target="_blank" rel="noreferrer"><span className="dot" style={{ background: "var(--purple)" }} />Sputnik DAO treasury</a>
-              <a className="pill" href={`${REPO_URL}/actions/workflows/test.yml`} target="_blank" rel="noreferrer"><span className="dot" style={{ background: "var(--blue)" }} />57 tests passing in CI</a>
+              <a className="pill" href={`${REPO_URL}/actions/workflows/test.yml`} target="_blank" rel="noreferrer"><span className="dot" style={{ background: "var(--blue)" }} />78 tests passing in CI</a>
             </div>
           </div>
           <div className="coins">
@@ -214,13 +228,13 @@ export default function App() {
       <main className="wrap">
         <section className="stats">
           <div className="stat"><div className="label">Active plans</div><div className="value">{loaded ? active.length : "…"}</div><div className="sub">{plans.length} total on this contract</div></div>
-          <div className="stat"><div className="label">Paid out so far</div><div className="value mono">{loaded ? formatAmount(totalPaid, meta, false) : "…"}</div><div className="sub">{plans.reduce((a, p) => a + p.runs_completed, 0)} runs completed</div></div>
+          <div className="stat"><div className="label">{paid.total === null ? "Paid out (est.)" : "Paid out so far"}</div><div className="value mono">{loaded ? formatAsset(totalPaid, tokenInfo) : "…"}</div><div className="sub">{paid.total === null ? `${tokenPlans.reduce((a, p) => a + p.runs_completed, 0)} runs completed` : `${paid.sent} transfers sent`}{otherNote}</div></div>
           <div className="stat"><div className="label">Next payday</div><div className="value mono">{nextRun ? formatCountdown(nextRun, nowMs).text : "—"}</div><div className="sub">{nextRun && formatCountdown(nextRun, nowMs).due ? "due: keeper runs every ~5 min, or trigger it below" : "keeper triggers it automatically"}</div></div>
-          <div className="stat"><div className="label">Committed in plans</div><div className="value mono">{loaded ? formatAmount(committed, meta, false) : "…"}</div><div className="sub">treasury holds {formatAmount(treasury, meta, false)}</div></div>
+          <div className="stat"><div className="label">Committed in plans</div><div className="value mono">{loaded ? formatAsset(committed, tokenInfo) : "…"}</div><div className="sub">treasury holds {formatAsset(treasury, tokenInfo)}{otherNote}</div></div>
         </section>
 
         {error && <div className="note err-text" style={{ marginBottom: 16 }}>RPC error: {error}</div>}
-        {toast && <div className={`note ${toast.tone === "ok" ? "ok-text" : toast.tone === "err" ? "err-text" : ""}`} role="status" style={{ marginBottom: 16 }}>{toast.text}</div>}
+        {toast && <div role="status" className={`note ${toast.tone === "ok" ? "ok-text" : toast.tone === "err" ? "err-text" : ""}`} style={{ marginBottom: 16 }}>{toast.text}</div>}
 
         <section className="grid">
           <div className="col">
@@ -230,18 +244,18 @@ export default function App() {
                 {!loaded && <div className="card empty">Loading plans from {CONTRACT}…</div>}
                 {loaded && plans.length === 0 && <div className="card empty">No plans yet. A DAO creates one by voting on a funding proposal.</div>}
                 {plans.slice().sort((a, b) => (a.status === "Active" ? -1 : 1) - (b.status === "Active" ? -1 : 1) || b.id - a.id).map((p) => (
-                  <PlanCard key={p.id} plan={p} meta={meta} nowMs={nowMs} selected={p.id === selected} onSelect={() => select(p.id)} onTrigger={() => trigger(p.id)} triggering={triggering === p.id} />
+                  <PlanCard key={p.id} plan={p} metas={metas} nowMs={nowMs} selected={p.id === selected} onSelect={() => select(p.id)} onTrigger={() => trigger(p.id)} triggering={triggering === p.id} />
                 ))}
               </div>
             </div>
-            {selectedPlan && <PlanDetail plan={selectedPlan} meta={meta} keeperRuns={keeper?.recent ?? []} />}
+            {selectedPlan && <PlanDetail key={selectedPlan.id} plan={selectedPlan} metas={metas} keeperRuns={keeper?.recent ?? []} />}
           </div>
 
           <div className="col">
-            <div id="live"><LiveFeed items={feed} meta={meta} nowMs={nowMs} plans={plans} /></div>
+            <div id="live"><LiveFeed items={feed} metas={metas} nowMs={nowMs} plans={plans} paidOut={paid.total === null ? null : formatAsset(paid.total, tokenInfo)} /></div>
             <div id="requests"><Requests proposals={proposals} reviews={reviews} /></div>
             <ClerkPanel reviews={reviews} />
-            <div id="destination"><DestinationPanel accountId={wallet.accountId} connected={wallet.connected} onSignIn={wallet.signIn} onSignOut={wallet.signOut} call={wallet.call} /></div>
+            <div id="destination"><DestinationPanel accountId={wallet.accountId} connected={wallet.connected} onSignIn={connect} onSignOut={wallet.signOut} call={wallet.call} /></div>
             <div className="card pad">
               <h2 style={{ marginBottom: 12 }}>How it works</h2>
               <div className="steps" style={{ gridTemplateColumns: "1fr" }}>

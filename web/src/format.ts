@@ -65,11 +65,17 @@ export function shortAccount(id: string, keep = 22): string {
 export function toCsv(rows: Array<Record<string, unknown>>): string {
   if (rows.length === 0) return "";
   const cols = Object.keys(rows[0]);
-  const esc = (v: unknown) => {
-    const s = v === null || v === undefined ? "" : String(v);
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
-  return [cols.join(","), ...rows.map((r) => cols.map((c) => esc(r[c])).join(","))].join("\n");
+  return [cols.map(csvCell).join(","), ...rows.map((r) => cols.map((c) => csvCell(r[c])).join(","))].join("\n");
+}
+
+/**
+ * One CSV cell. Text that a spreadsheet would run as a formula (plan titles and account names are chosen by whoever
+ * created the plan) is neutralised with a leading single quote; cells with quotes, commas or line breaks are quoted.
+ */
+export function csvCell(v: unknown): string {
+  let s = v === null || v === undefined ? "" : String(v);
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
 export function download(filename: string, content: string, type = "text/csv") {

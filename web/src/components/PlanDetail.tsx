@@ -1,67 +1,116 @@
-import { useEffect, useState } from "react";
-import type { Destination, Payout, Plan, RouteRecord, TokenMeta } from "../near";
-import { getPayouts, getPlanDestinations, getRoute, view } from "../near";
-import { download, formatAmount, formatInterval, formatTime, shortAccount, sum, toCsv } from "../format";
+import { useEffect, useRef, useState } from "react";
+import type { Destination, Payout, Plan, RouteRecord } from "../near";
+import { getPayouts, getPlanDestinations, getPlanLedger, getRoute, view } from "../near";
+import { download, formatInterval, formatTime, shortAccount, sum, toCsv } from "../format";
 import { CONTRACT, EXPLORER, destinationLabel } from "../config";
+import { assetInfo, csvAmount, formatAsset, type MetaMap } from "../assets";
+import { usePollTick } from "./LiveFeed";
 
-export function PlanDetail({ plan, meta, keeperRuns }: { plan: Plan; meta: TokenMeta | null; keeperRuns: Array<{ plan_id: number; outcome: any; tx: string }> }) {
-  const isNear = plan.asset === "Near";
+const HISTORY_ROWS = 40;
+
+// Rendered with key={plan.id} by App, so switching plans starts from empty state; the request counter below also drops
+// any response that arrives after a newer request was made.
+export function PlanDetail({ plan, metas, keeperRuns }: { plan: Plan; metas: MetaMap; keeperRuns: Array<{ plan_id: number; outcome: any; tx: string }> }) {
+  const info = assetInfo(plan.asset, metas);
+  const fmt = (amount: string | bigint) => formatAsset(amount, info);
   const [payouts, setPayouts] = useState<Payout[] | null>(null);
   const [routes, setRoutes] = useState<Record<number, RouteRecord>>({});
   const [dests, setDests] = useState<Record<string, Destination>>({});
   const [guardians, setGuardians] = useState<string[]>([]);
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+  const [destErr, setDestErr] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportErr, setExportErr] = useState<string | null>(null);
+  const reqId = useRef(0);
   useEffect(() => {
     let cancelled = false;
     view<string[]>(CONTRACT, "get_guardians", { plan_id: plan.id }).then((g) => { if (!cancelled) setGuardians(g ?? []); }).catch(() => {});
     return () => { cancelled = true; };
   }, [plan.id]);
 
+  // Re-read while a record is still Pending (its on_payout callback has not landed yet) or after a failed read.
+  const tick = usePollTick(loadErr !== null || destErr || (payouts ?? []).some((p) => p.status === "Pending"));
+
   useEffect(() => {
-    let cancelled = false;
+    const id = ++reqId.current;
+    const live = () => id === reqId.current;
     (async () => {
-      const from = Math.max(0, plan.payout_count - 40);
-      const list = await getPayouts(plan.id, from, 40);
-      const d = await getPlanDestinations(plan.id);
-      if (cancelled) return;
+      let list: Payout[];
+      try {
+        const from = Math.max(0, plan.payout_count - HISTORY_ROWS);
+        list = await getPayouts(plan.id, from, HISTORY_ROWS);
+      } catch (e) {
+        if (live()) setLoadErr(String((e as any)?.message ?? e).slice(0, 120));
+        return;
+      }
+      if (!live()) return;
+      setLoadErr(null);
       setPayouts(list.slice().reverse());
-      setRoutes({});
+      // Destinations only decorate the history; a failure here must not hide it.
+      let d: Array<[string, Destination]> | null = null;
+      try {
+        d = await getPlanDestinations(plan.id);
+      } catch {
+        /* keep the previous destinations, retry on the next tick */
+      }
+      if (!live()) return;
+      setDestErr(d === null);
+      if (d === null) return;
       setDests(Object.fromEntries(d));
+      const routedRecipients = new Set(d.map(([a]) => a));
       const routed: Record<number, RouteRecord> = {};
       await Promise.all(
-        list.map(async (p) => {
-          if (!dests[p.recipient] && !d.some(([a]) => a === p.recipient)) return;
-          const r = await getRoute(plan.id, p.seq);
-          if (r) routed[p.seq] = r;
-        }),
+        list
+          .filter((p) => routedRecipients.has(p.recipient))
+          .map(async (p) => {
+            const r = await getRoute(plan.id, p.seq).catch(() => null);
+            if (r) routed[p.seq] = r;
+          }),
       );
-      if (!cancelled) setRoutes(routed);
+      if (live()) setRoutes(routed);
     })();
     return () => {
-      cancelled = true;
+      reqId.current++;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [plan.id, plan.payout_count]);
+  }, [plan.id, plan.payout_count, tick]);
 
   const rows = payouts ?? [];
   const txFor = (runIndex: number) => keeperRuns.find((r) => r.plan_id === plan.id && r.outcome?.Sent?.run_index === runIndex)?.tx;
   const perRun = sum(plan.recipients.map((r) => r.amount));
 
-  const exportCsv = () => {
-    const csvRows = rows.map((p) => ({
-      plan_id: p.plan_id,
-      seq: p.seq,
-      run: p.run_index,
-      recipient: p.recipient,
-      amount: formatAmount(p.amount, meta, isNear),
-      amount_base_units: p.amount,
-      status: p.status,
-      paid_at_utc: new Date(p.timestamp * 1000).toISOString(),
-      block_height: p.block_height,
-      routed_to: routes[p.seq] ? `${destinationLabel(routes[p.seq].destination_asset)} ${routes[p.seq].destination_address}` : "",
-      deposit_address: routes[p.seq]?.deposit_address ?? "",
-      tx: txFor(p.run_index) ? `${EXPLORER}/txns/${txFor(p.run_index)}` : "",
-    }));
-    download(`standing-order-plan-${plan.id}-payouts.csv`, toCsv(csvRows));
+  // Every payout of the plan, not only the rows shown.
+  const exportCsv = async () => {
+    setExporting(true);
+    setExportErr(null);
+    try {
+      const { payouts: all, routes: allRoutes } = await getPlanLedger(plan);
+      const csvRows = all.map((p) => {
+        const r = allRoutes.get(p.seq);
+        const tx = txFor(p.run_index);
+        return {
+          plan_id: p.plan_id,
+          seq: p.seq,
+          run: p.run_index,
+          recipient: p.recipient,
+          amount: csvAmount(p.amount, info),
+          token_symbol: info.decimals === null ? "" : info.symbol,
+          token_contract: info.contract,
+          amount_base_units: p.amount,
+          status: p.status,
+          paid_at_utc: new Date(p.timestamp * 1000).toISOString(),
+          block_height: p.block_height,
+          routed_to: r ? `${destinationLabel(r.destination_asset)} ${r.destination_address}` : "",
+          deposit_address: r?.deposit_address ?? "",
+          tx: tx ? `${EXPLORER}/txns/${tx}` : "",
+        };
+      });
+      if (csvRows.length === 0) throw new Error("no payouts to export yet");
+      download(`standing-order-plan-${plan.id}-payouts.csv`, toCsv(csvRows));
+    } catch (e) {
+      setExportErr(String((e as any)?.message ?? e).slice(0, 120));
+    } finally {
+      setExporting(false);
+    }
   };
 
   return (
@@ -71,14 +120,15 @@ export function PlanDetail({ plan, meta, keeperRuns }: { plan: Plan; meta: Token
           <h2>{plan.title}</h2>
           <div className="tiny mono">plan #{plan.id} · {formatInterval(plan.interval_seconds)} · created {formatTime(plan.created_at)}</div>
         </div>
-        <button className="btn ghost sm" onClick={exportCsv} disabled={rows.length === 0}>Export CSV</button>
+        <button className="btn ghost sm" onClick={exportCsv} disabled={exporting || plan.payout_count === 0} title={`All ${plan.payout_count} payouts of this plan as CSV`}>{exporting ? "Building CSV…" : "Export CSV"}</button>
       </div>
+      {exportErr && <div className="tiny err-text">Export failed: {exportErr}</div>}
 
       <div className="kv">
         <div><span className="k">Treasury (owner)</span><span className="v">{plan.owner}</span></div>
-        <div><span className="k">Asset</span><span className="v">{isNear ? "NEAR" : (plan.asset as any).Ft.contract}</span></div>
-        <div><span className="k">Balance</span><span className="v">{formatAmount(plan.balance, meta, isNear)}</span></div>
-        <div><span className="k">Cap per run</span><span className="v">{formatAmount(plan.cap_per_run, meta, isNear)} (run total {formatAmount(perRun, meta, isNear)})</span></div>
+        <div><span className="k">Asset</span><span className="v">{info.contract === "near" ? "NEAR" : info.decimals === null ? `${info.contract} (no token metadata)` : `${info.symbol} · ${info.contract}`}</span></div>
+        <div><span className="k">Balance</span><span className="v">{fmt(plan.balance)}</span></div>
+        <div><span className="k">Cap per run</span><span className="v">{fmt(plan.cap_per_run)} (run total {fmt(perRun)})</span></div>
         <div><span className="k">Next run</span><span className="v">{formatTime(plan.next_run_at)}</span></div>
         <div><span className="k">Ends</span><span className="v">{plan.end_at ? formatTime(plan.end_at) : "open-ended"}</span></div>
       </div>
@@ -93,7 +143,7 @@ export function PlanDetail({ plan, meta, keeperRuns }: { plan: Plan; meta: Token
               <tr key={r.account_id}>
                 <td className="mono">{r.account_id}</td>
                 <td>{dests[r.account_id] ? <span className="chip blue" title={dests[r.account_id].address}>{destinationLabel(dests[r.account_id].asset_id)} · {shortAccount(dests[r.account_id].address, 14)}</span> : <span className="muted">NEAR account</span>}</td>
-                <td className="num">{formatAmount(r.amount, meta, isNear)}</td>
+                <td className="num">{fmt(r.amount)}</td>
               </tr>
             ))}
           </tbody>
@@ -102,14 +152,16 @@ export function PlanDetail({ plan, meta, keeperRuns }: { plan: Plan; meta: Token
       </div>
 
       <div>
-        <h3>Payout history</h3>
+        <h3>Payout history{plan.payout_count > HISTORY_ROWS ? <span className="tiny muted"> · latest {HISTORY_ROWS} of {plan.payout_count}, Export CSV has all</span> : null}</h3>
+        {loadErr && <div className="tiny err-text" style={{ marginBottom: 8 }}>Couldn't read payout history from RPC ({loadErr}). Retrying…</div>}
+        {destErr && payouts !== null && <div className="tiny muted" style={{ marginBottom: 8 }}>Cross-chain destinations unavailable right now; retrying.</div>}
         {payouts === null ? (
-          <div className="empty">Loading payout history…</div>
+          <div className="empty">{loadErr ? "Payout history unavailable for now." : "Loading payout history…"}</div>
         ) : rows.length === 0 ? (
           <div className="empty">No payouts yet. The first run is due {formatTime(plan.next_run_at)}.</div>
         ) : (
           <div className="table-wrap">
-          <table>
+          <table className="payouts">
             <thead><tr><th>Run</th><th>Recipient</th><th className="num">Amount</th><th>Status</th><th>When</th><th>Proof</th></tr></thead>
             <tbody>
               {rows.map((p) => {
@@ -122,10 +174,10 @@ export function PlanDetail({ plan, meta, keeperRuns }: { plan: Plan; meta: Token
                       {shortAccount(p.recipient)}
                       {route && <div className="tiny">→ {destinationLabel(route.destination_asset)} {shortAccount(route.destination_address, 12)}</div>}
                     </td>
-                    <td className="num">{formatAmount(p.amount, meta, isNear)}</td>
+                    <td className="num">{fmt(p.amount)}</td>
                     <td><span className={`chip ${p.status === "Sent" ? "active" : p.status === "Failed" ? "failed" : "neutral"}`}>{p.status}</span></td>
-                    <td className="muted">{formatTime(p.timestamp)}</td>
-                    <td className="tiny">
+                    <td className="muted nowrap">{formatTime(p.timestamp)}</td>
+                    <td className="tiny nowrap">
                       {tx ? <a href={`${EXPLORER}/txns/${tx}`} target="_blank" rel="noreferrer">tx ↗</a> : <a href={`${EXPLORER}/blocks/${p.block_height}`} target="_blank" rel="noreferrer">block {p.block_height} ↗</a>}
                       {route && <div><a href={`${EXPLORER}/address/${route.deposit_address}`} target="_blank" rel="noreferrer">deposit addr ↗</a></div>}
                     </td>
