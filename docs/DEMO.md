@@ -11,7 +11,7 @@
 | 48–56 s | "Get paid on another chain" panel: destination = USDC on Base; sandbox test output `routed_payout_goes_to_verified_deposit_address ... ok` | "Recipients choose the chain. The contract verifies 1Click's signature before paying the route." |
 | 56–60 s | Repo README | "Open source. Trezu templates included. Try it in two minutes." |
 
-`web/e2e/record-demo.mjs` records a 75-second screen capture of the live dashboard (`docs/demo.webm`, converted to `docs/demo.mp4`).
+`docs/demo.mp4` (88 s, captions, no voice) is a scripted tour of the live dashboard recorded seconds after a testnet payday: plan, payout history, live feed, DAO proposals, the clerk's receipt checks, the cross-chain panel, `npm run judge`. Re-record with `node web/e2e/record-demo.mjs` right after a payday lands.
 
 ## X post (draft, human posts it)
 
