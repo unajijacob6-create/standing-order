@@ -2,7 +2,7 @@
 
 ![tests](https://github.com/unajijacob6-create/standing-order/actions/workflows/test.yml/badge.svg)
 
-**Vote once, pay every period on NEAR; cross-chain delivery through NEAR Intents, verified on-chain (mainnet demo pending).**
+**Vote once, pay every period on NEAR. Recipients can choose USDC on Base, Arbitrum or Solana through NEAR Intents, and the contract checks 1Click's signature before it pays a route.**
 
 **Live dashboard:** https://unajijacob6-create.github.io/standing-order/ (reads the testnet contract directly; payouts land every 10 minutes; CSV export of every payout on the page)
 
@@ -202,10 +202,14 @@ Expected log lines (one JSON object per line):
 {"event":"sent","plan_id":1,"outcome":{"Sent":{"sent":3,"completed":true}},"tx":"..."}
 ```
 
-Cross-chain routes are mainnet only: 1Click has no testnet, so no routed payout has settled on
-mainnet yet. The sandbox test `routed_payouts` exercises the full verification path with a stand-in
-signing key, and the unit test `real_live_quote_verifies` checks a genuine 1Click signature. See
-`docs/TESTNET.md` for the live accounts and transactions and `docs/MAINNET.md` for the mainnet runbook.
+Cross-chain routes run on mainnet only: NEAR Intents has no testnet, and the hackathon accepts testnet-only
+projects in every track (HACKATHON.md, Q-007 and Q-010). So everything else runs live on testnet, and the routing
+step is proven by tests: the unit test `real_live_quote_verifies` checks a genuine signed 1Click mainnet quote
+against 1Click's production key, the sandbox test `routed_payouts` runs the full verify-and-pay path and refuses
+five forged or mismatched quotes, and a unit test refuses a replayed quote. On testnet the keeper runs with
+`CROSSCHAIN=dry`: for a recipient with a registered destination it fetches a real 1Click quote and logs it, then
+pays on NEAR. Turning it on is a mainnet deploy plus `CROSSCHAIN=live` (`docs/MAINNET.md`). See `docs/TESTNET.md`
+for the live accounts and transactions.
 
 ## Private payroll clerk: what the model sees, what is kept
 

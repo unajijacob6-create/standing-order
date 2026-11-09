@@ -21,7 +21,7 @@ Structure the organisers suggest: the user's problem → one complete moment →
 >
 > Built at NEAR HACKATHON. In the clip: a Sputnik DAO approves one proposal, then payday runs itself — 207 payouts so far on testnet, every one in the on-chain ledger (CSV button on the page).
 >
-> What NEAR does here: Sputnik keeps custody (no new multisig); the keeper's key can only call `run_due`; any council member the DAO names can hit pause alone; recipients get USDC on Base/Arbitrum/Solana through NEAR Intents, 1Click's signature checked on-chain; a payroll clerk on NEAR AI Cloud drafts the proposal from invoices inside a TEE and leaves a receipt you can re-verify.
+> What NEAR does here: Sputnik keeps custody (no new multisig); the keeper's key can only call `run_due`; any council member the DAO names can hit pause alone; recipients can choose USDC on Base/Arbitrum/Solana through NEAR Intents (mainnet-only), with 1Click's signature checked on-chain before a route is paid; a payroll clerk on NEAR AI Cloud drafts the proposal from invoices inside a TEE and leaves a receipt you can re-verify.
 >
 > Try it without keys in 20 s: `git clone … && npm ci && npm run judge`
 > Live: https://unajijacob6-create.github.io/standing-order/ · Repo: https://github.com/unajijacob6-create/standing-order
@@ -30,7 +30,6 @@ Structure the organisers suggest: the user's problem → one complete moment →
 > Run a treasury on NEAR? Reply with your DAO and I'll file the first plan template with you on testnet.
 
 Attach `docs/demo.mp4` (≤90 s: a payday landing, the keeper log line, the clerk's "What was verified" panel).
-Once the mainnet routed payout exists, replace the Intents sentence with its transaction link.
 
 ## Pre-submission feedback post (draft, post 2–3 days before the 2026-11-14 deadline)
 
@@ -50,7 +49,7 @@ Goal: concrete answers that can still change the README and the default plan par
 >    3 months of payroll in one vote? 6? 12? Or would you rather fund one month and let a top-up proposal recur?
 >    (The answer sets the default `end_at` and the top-up template's suggested amount.)
 > 2. **Payout chain and asset.** Which chain/asset do contributors actually want to receive: USDC on Base, USDC on
->    Arbitrum, native NEAR, something else? The first mainnet routed payout will target the most-requested one.
+>    Arbitrum, native NEAR, something else? The docs' default destination will be the most-requested one.
 > 3. **README "Try it".** Open https://github.com/unajijacob6-create/standing-order#try-it-do-x-see-y and tell me the first
 >    sentence that is unclear, or the first command that did not do what the "See:" line promised. Section A (local
 >    tests) and B (watch testnet, no keys) take under five minutes.
