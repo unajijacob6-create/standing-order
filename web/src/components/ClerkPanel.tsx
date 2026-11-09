@@ -136,6 +136,9 @@ export function ClerkPanel({ reviews }: { reviews: ReviewIndexItem[] }) {
   }, [latest?.file]);
   const rows = open ? receiptRows(open) : [];
   const verified = open?.receipt?.verified === true;
+  // Collapsed to one summary line by default; opens by itself if anything failed.
+  const [verifyOpen, setVerifyOpen] = useState(false);
+  useEffect(() => { if (open && (!verified || rows.some((r) => r.ok === false))) setVerifyOpen(true); }, [open?.receipt?.chat_id]);
   return (
     <div className="card pad" id="clerk">
       <div className="section-head">
@@ -169,10 +172,14 @@ export function ClerkPanel({ reviews }: { reviews: ReviewIndexItem[] }) {
           ))}
 
           <div className="verify" aria-label="What was verified">
-            <div className="verify-head">
+            <button type="button" className="verify-head verify-toggle" aria-expanded={verifyOpen} onClick={() => setVerifyOpen(!verifyOpen)}>
               <h3>What was verified</h3>
+              <span className="tiny muted">{rows.filter((r) => r.ok === true).length} checks passed</span>
+              <span className="spacer" />
               <span className={`chip ${verified ? "active" : "failed"}`}>{verified ? "signature verified" : "unverified"}</span>
-            </div>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" aria-hidden className={verifyOpen ? "flip" : ""}><path d="m6 9 6 6 6-6" /></svg>
+            </button>
+            {verifyOpen && (<>
             <ul className="verify-list">
               {rows.map((row, i) => (
                 <li key={i} className="verify-row">
@@ -187,12 +194,13 @@ export function ClerkPanel({ reviews }: { reviews: ReviewIndexItem[] }) {
             </ul>
             <div className="verify-foot mono">
               Re-verify offline: <code>npm run judge</code>
-              <span className="vnote">recomputes the hashes and recovers the signer from the JSON</span>
+              <span className="vnote">recovers the signer from the stored hashes and checks it against today's attestation report</span>
             </div>
+            </>)}
           </div>
 
           <div className="row">
-            <a className="btn ghost sm" href={`${BASE}reviews/${latest!.file}`} target="_blank" rel="noreferrer">Full JSON</a>
+            <a className="btn ghost sm" href={`${BASE}reviews/${latest!.file}`} target="_blank" rel="noreferrer" title="The clerk's raw receipt file (JSON): model, nonce, hashes, signature, attestation summary">See the signed receipt ↗</a>
             {reviews.length > 1 && <span className="tiny">{reviews.length} reviews published</span>}
           </div>
         </div>

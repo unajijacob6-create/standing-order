@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { ShowMore } from "./Expand";
 import type { Proposal, ProposalAction, ProposalInfo } from "../near";
 import { proposalTouchesStandingOrder } from "../near";
 import { DAO, EXPLORER } from "../config";
@@ -38,6 +40,7 @@ function summary(desc: string): string {
 }
 
 export function Requests({ proposals, reviews = [] }: { proposals: Proposal[]; reviews?: ReviewIndexItem[] }) {
+  const [open, setOpen] = useState(false);
   const ours = proposals.map((p) => ({ p, info: proposalTouchesStandingOrder(p) })).filter((x) => x.info);
   return (
     <div className="card pad">
@@ -48,7 +51,7 @@ export function Requests({ proposals, reviews = [] }: { proposals: Proposal[]; r
       {ours.length === 0 ? (
         <div className="empty">No Standing Order proposals on this DAO yet.</div>
       ) : (
-        ours.map(({ p, info }) => (
+        (open ? ours : ours.slice(0, 5)).map(({ p, info }) => (
           <div className="req" key={p.id}>
             <div className="id">#{p.id}</div>
             <div>
@@ -64,6 +67,7 @@ export function Requests({ proposals, reviews = [] }: { proposals: Proposal[]; r
           </div>
         ))
       )}
+      <ShowMore total={ours.length} shown={5} expanded={open} onToggle={() => setOpen(!open)} noun="proposals" />
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ShowMore } from "./Expand";
 import type { Payout, Plan } from "../near";
 import { getPayouts, getPlanLedger } from "../near";
 import { EXPLORER, destinationLabel } from "../config";
@@ -154,6 +155,7 @@ export async function buildLedgerCsv(plans: Plan[], metas: MetaMap): Promise<{ c
 export function LiveFeed({ items, metas, nowMs, plans, paidOut }: { items: FeedItem[]; metas: MetaMap; nowMs: number; plans: Plan[]; paidOut: string | null }) {
   const [exporting, setExporting] = useState(false);
   const [exportErr, setExportErr] = useState<string | null>(null);
+  const [feedOpen, setFeedOpen] = useState(false);
   const payoutCount = plans.reduce((a, p) => a + p.payout_count, 0);
 
   const exportCsv = async () => {
@@ -189,7 +191,7 @@ export function LiveFeed({ items, metas, nowMs, plans, paidOut }: { items: FeedI
         <div className="empty">Waiting for the first payout…</div>
       ) : (
         <ul className="feed">
-          {items.map((it) => (
+          {(feedOpen ? items : items.slice(0, 6)).map((it) => (
             <li key={`${it.plan_id}-${it.seq}`} className={nowMs / 1000 - it.timestamp < 90 ? "fresh" : ""}>
               <span className={`feed-dot ${it.status === "Failed" ? "bad" : ""}`} />
               <div className="feed-body">
@@ -206,6 +208,7 @@ export function LiveFeed({ items, metas, nowMs, plans, paidOut }: { items: FeedI
           ))}
         </ul>
       )}
+      {items.length > 0 && <ShowMore total={items.length} shown={6} expanded={feedOpen} onToggle={() => setFeedOpen(!feedOpen)} noun="recent payouts" />}
     </div>
   );
 }

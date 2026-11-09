@@ -63,8 +63,9 @@ export function DestinationPanel({ accountId, connected, onSignIn, onSignOut, ca
         {connected ? <button className="btn ghost sm" onClick={onSignOut}>{accountId.length > 20 ? accountId.slice(0, 18) + "…" : accountId} · sign out</button> : <button className="btn sm" onClick={onSignIn}>Connect wallet</button>}
       </div>
       <p className="muted" style={{ marginTop: 0 }}>
-        Recipients choose. Register a destination and each payout is swapped and delivered through NEAR Intents; the contract only pays a deposit
-        address that 1Click has signed for <em>your</em> registered address, and refunds come back to your NEAR account.
+        Recipients choose. Register a destination and, on mainnet, each payout is swapped and delivered through NEAR Intents; the contract only pays a
+        deposit address that 1Click has signed for <em>your</em> registered address, and refunds come back to your NEAR account. NEAR Intents has no
+        testnet, so on this demo the keeper fetches the quote in dry mode and pays on NEAR.
       </p>
       <p className="muted tiny" style={{ marginTop: 0 }}>
         <b>Fiat / off-ramp.</b> Fiat is out of scope: register the USDC deposit address of your exchange or off-ramp on a supported chain. 1Click

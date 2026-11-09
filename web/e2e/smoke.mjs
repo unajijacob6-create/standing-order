@@ -47,6 +47,14 @@ try {
     console.log(JSON.stringify({ name, plans, stats, hasDetail, errors: errors.slice(0, 3) }));
     if (errors.some((e) => !/favicon|ERR_CONNECTION_REFUSED|Failed to fetch|net::/.test(e))) failures.push(`${name}: console errors ${errors.join(" | ").slice(0, 300)}`);
     await page.screenshot({ path: path.join(out, `${name}.png`), fullPage: true });
+    // Second page: Treasury & proof (requests, clerk, destination).
+    await page.click('nav a[href="#treasury"]');
+    await page.waitForSelector(".req", { timeout: 30_000 }).catch(() => failures.push(`${name}: treasury page shows no requests`));
+    const hasClerk = (await page.locator("#clerk").count()) > 0;
+    const hasDestination = (await page.locator("#destination").count()) > 0;
+    if (!hasClerk || !hasDestination) failures.push(`${name}: treasury page missing clerk or destination panel`);
+    if (await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1)) failures.push(`${name}: horizontal overflow on treasury page`);
+    await page.screenshot({ path: path.join(out, `${name}-treasury.png`), fullPage: true });
     await ctx.close();
   }
   await browser.close();

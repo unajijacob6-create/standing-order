@@ -32,6 +32,9 @@ export default function App() {
   const [keeper, setKeeper] = useState<KeeperStatus | null>(null);
   // Deep link: #plan-<id> preselects a plan on load; selecting one updates the hash.
   const [selected, setSelected] = useState<number | null>(() => planIdFromHash());
+  // Two pages, chosen by the URL hash (GitHub Pages has no server-side routes): the Overview, and Treasury & proof.
+  const [page, setPage] = useState<Page>(() => pageFromHash());
+  const [howOpen, setHowOpen] = useState(false);
   const [nowMs, setNowMs] = useState(Date.now());
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -88,6 +91,16 @@ export default function App() {
     const onHash = () => {
       const id = planIdFromHash();
       if (id !== null) setSelected(id);
+      const next = pageFromHash();
+      setPage((prev) => {
+        if (prev !== next) {
+          // A section anchor (#requests, #clerk, #destination, #live, #plans) scrolls to that section once the page renders;
+          // a plain page switch starts at the top.
+          const target = sectionFromHash();
+          requestAnimationFrame(() => (target ? document.getElementById(target)?.scrollIntoView() : window.scrollTo(0, 0)));
+        }
+        return next;
+      });
     };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
@@ -157,12 +170,9 @@ export default function App() {
       <header className="header">
         <div className="wrap">
           <a className="brand" href="#top"><Logo /> Standing Order</a>
-          <nav className="nav" aria-label="Sections">
-            <a href="#plans">Plans</a>
-            <a href="#live">Live</a>
-            <a href="#requests">Requests</a>
-            <a href="#clerk">Clerk</a>
-            <a href="#destination">Get paid</a>
+          <nav className="nav" aria-label="Pages">
+            <a href="#top" className={page === "overview" ? "active" : ""} aria-current={page === "overview" ? "page" : undefined}>Overview</a>
+            <a href="#treasury" className={page === "treasury" ? "active" : ""} aria-current={page === "treasury" ? "page" : undefined}>Treasury &amp; proof</a>
           </nav>
           <div className="spacer" />
           <span className="pill hide-sm"><span className="dot" style={{ background: NETWORK === "mainnet" ? "var(--green)" : "var(--purple)" }} />{NETWORK}</span>
@@ -193,6 +203,7 @@ export default function App() {
         </div>
       </header>
 
+      {page === "overview" && (<>
       <section className="hero" id="top">
         <div className="glow" />
         <Particles />
@@ -253,21 +264,44 @@ export default function App() {
 
           <div className="col">
             <div id="live"><LiveFeed items={feed} metas={metas} nowMs={nowMs} plans={plans} paidOut={paid.total === null ? null : formatAsset(paid.total, tokenInfo)} /></div>
-            <div id="requests"><Requests proposals={proposals} reviews={reviews} /></div>
-            <ClerkPanel reviews={reviews} />
-            <div id="destination"><DestinationPanel accountId={wallet.accountId} connected={wallet.connected} onSignIn={connect} onSignOut={wallet.signOut} call={wallet.call} /></div>
             <div className="card pad">
-              <h2 style={{ marginBottom: 12 }}>How it works</h2>
-              <div className="steps" style={{ gridTemplateColumns: "1fr" }}>
+              <button type="button" className="how-toggle" aria-expanded={howOpen} onClick={() => setHowOpen(!howOpen)}>
+                <h2>How it works</h2>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden className={howOpen ? "flip" : ""}><path d="m6 9 6 6 6-6" /></svg>
+              </button>
+              {!howOpen && <p className="tiny" style={{ margin: "8px 0 0" }}>One vote funds a plan · code pays on schedule · a private clerk checks payroll · recipients choose the chain.</p>}
+              {howOpen && (
+              <div className="steps" style={{ gridTemplateColumns: "1fr", marginTop: 12 }}>
                 <div className="step"><div className="n">01 · one vote</div><b>The treasury funds a plan</b>The council approves a single proposal: token amount, recipients, cadence, cap. Trezu templates make it a form.</div>
-                <div className="step"><div className="n">02 · code pays</div><b>Runs execute on schedule</b>A keeper with a key that can only call <code>run_due</code> triggers each period. No signatures on payday, no partial runs, failed transfers re-credit.</div>
+                <div className="step"><div className="n">02 · code pays</div><b>Runs execute on schedule</b>A keeper with a key that can only call <code>run_due</code> triggers each period. No signatures on payday; a run starts only when fully funded; failed transfers re-credit.</div>
                 <div className="step"><div className="n">03 · private clerk</div><b>Checked before the vote</b>A NEAR AI model in a TEE reviews or drafts the payroll from invoices; every verdict carries a signed, re-verifiable receipt.</div>
-                <div className="step"><div className="n">04 · any chain</div><b>Recipients choose where</b>Register a destination and the contract pays a 1Click deposit address it verified was signed for you. Refunds go to you.</div>
+                <div className="step"><div className="n">04 · any chain</div><b>Recipients choose where</b>Register a destination and, on mainnet, the contract pays a 1Click deposit address it verified was signed for you. Refunds go to you.</div>
               </div>
+              )}
             </div>
           </div>
         </section>
       </main>
+      </>)}
+
+      {page === "treasury" && (
+        <main className="wrap page-treasury">
+          <div className="page-intro">
+            <h1>Treasury &amp; proof</h1>
+            <p className="lede">Every proposal the DAO voted on, the private clerk's TEE-signed reviews, and where recipients choose to be paid.</p>
+          </div>
+          {toast && <div role="status" className={`note ${toast.tone === "ok" ? "ok-text" : toast.tone === "err" ? "err-text" : ""}`} style={{ marginBottom: 16 }}>{toast.text}</div>}
+          <section className="grid">
+            <div className="col">
+              <div id="requests"><Requests proposals={proposals} reviews={reviews} /></div>
+            </div>
+            <div className="col">
+              <div id="clerk"><ClerkPanel reviews={reviews} /></div>
+              <div id="destination"><DestinationPanel accountId={wallet.accountId} connected={wallet.connected} onSignIn={connect} onSignOut={wallet.signOut} call={wallet.call} /></div>
+            </div>
+          </section>
+        </main>
+      )}
 
       <footer className="footer">
         <div className="wrap row" style={{ justifyContent: "space-between" }}>
@@ -277,6 +311,18 @@ export default function App() {
       </footer>
     </>
   );
+}
+
+type Page = "overview" | "treasury";
+const TREASURY_ANCHORS = ["#treasury", "#requests", "#clerk", "#destination"];
+
+function pageFromHash(): Page {
+  return TREASURY_ANCHORS.includes(window.location.hash) ? "treasury" : "overview";
+}
+
+function sectionFromHash(): string | null {
+  const h = window.location.hash.slice(1);
+  return ["requests", "clerk", "destination", "live", "plans"].includes(h) ? h : null;
 }
 
 function planIdFromHash(): number | null {

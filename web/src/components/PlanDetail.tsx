@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ShowMore } from "./Expand";
 import type { Destination, Payout, Plan, RouteRecord } from "../near";
 import { getPayouts, getPlanDestinations, getPlanLedger, getRoute, view } from "../near";
 import { download, formatInterval, formatTime, shortAccount, sum, toCsv } from "../format";
@@ -10,9 +11,12 @@ const HISTORY_ROWS = 40;
 
 // Rendered with key={plan.id} by App, so switching plans starts from empty state; the request counter below also drops
 // any response that arrives after a newer request was made.
+const COLLAPSED_ROWS = 5;
+
 export function PlanDetail({ plan, metas, keeperRuns }: { plan: Plan; metas: MetaMap; keeperRuns: Array<{ plan_id: number; outcome: any; tx: string }> }) {
   const info = assetInfo(plan.asset, metas);
   const fmt = (amount: string | bigint) => formatAsset(amount, info);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [payouts, setPayouts] = useState<Payout[] | null>(null);
   const [routes, setRoutes] = useState<Record<number, RouteRecord>>({});
   const [dests, setDests] = useState<Record<string, Destination>>({});
@@ -164,7 +168,7 @@ export function PlanDetail({ plan, metas, keeperRuns }: { plan: Plan; metas: Met
           <table className="payouts">
             <thead><tr><th>Run</th><th>Recipient</th><th className="num">Amount</th><th>Status</th><th>When</th><th>Proof</th></tr></thead>
             <tbody>
-              {rows.map((p) => {
+              {(historyOpen ? rows : rows.slice(0, COLLAPSED_ROWS)).map((p) => {
                 const route = routes[p.seq];
                 const tx = txFor(p.run_index);
                 return (
@@ -188,6 +192,7 @@ export function PlanDetail({ plan, metas, keeperRuns }: { plan: Plan; metas: Met
           </table>
           </div>
         )}
+        {payouts !== null && <ShowMore total={rows.length} shown={COLLAPSED_ROWS} expanded={historyOpen} onToggle={() => setHistoryOpen(!historyOpen)} noun="loaded payouts" />}
       </div>
 
       <div className="note">
