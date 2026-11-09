@@ -24,7 +24,7 @@ Structure the organisers suggest: the user's problem → one complete moment →
 > What NEAR does here: Sputnik keeps custody (no new multisig); the keeper's key can only call `run_due`; any council member the DAO names can hit pause alone; recipients get USDC on Base/Arbitrum/Solana through NEAR Intents, 1Click's signature checked on-chain; a payroll clerk on NEAR AI Cloud drafts the proposal from invoices inside a TEE and leaves a receipt you can re-verify.
 >
 > Try it without keys in 20 s: `git clone … && npm ci && npm run judge`
-> Live: https://nsulyman-boop.github.io/standing-order/ · Repo: https://github.com/nsulyman-boop/standing-order
+> Live: https://unajijacob6-create.github.io/standing-order/ · Repo: https://github.com/unajijacob6-create/standing-order
 > @NEARProtocol #NEARHackathon @NearBuilders @NearLegion
 >
 > Run a treasury on NEAR? Reply with your DAO and I'll file the first plan template with you on testnet.
@@ -42,7 +42,7 @@ Goal: concrete answers that can still change the README and the default plan par
 > One DAO vote funds a payroll plan; a keeper whose key can only call `run_due` pays every period; the council can
 > pause, resume (with or without back pay), top up or sweep by vote. Recipients can register a destination on
 > Base/Arbitrum/Ethereum/Solana and the contract verifies 1Click's quote signature on-chain before paying the route.
-> Live on testnet: `payroll-demo.sputnik-v2.testnet`, repo https://github.com/nsulyman-boop/standing-order.
+> Live on testnet: `payroll-demo.sputnik-v2.testnet`, repo https://github.com/unajijacob6-create/standing-order.
 >
 > Three questions, answers from anyone who has sat on a council or been paid by one are most useful:
 >
@@ -51,7 +51,7 @@ Goal: concrete answers that can still change the README and the default plan par
 >    (The answer sets the default `end_at` and the top-up template's suggested amount.)
 > 2. **Payout chain and asset.** Which chain/asset do contributors actually want to receive: USDC on Base, USDC on
 >    Arbitrum, native NEAR, something else? The first mainnet routed payout will target the most-requested one.
-> 3. **README "Try it".** Open https://github.com/nsulyman-boop/standing-order#try-it-do-x-see-y and tell me the first
+> 3. **README "Try it".** Open https://github.com/unajijacob6-create/standing-order#try-it-do-x-see-y and tell me the first
 >    sentence that is unclear, or the first command that did not do what the "See:" line promised. Section A (local
 >    tests) and B (watch testnet, no keys) take under five minutes.
 >

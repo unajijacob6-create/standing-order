@@ -10,7 +10,7 @@ Form: https://nearhackathon.com/#apply (or POST https://nearhackathon.com/api/ap
 | size | `1` |
 | tracks | `["social", "realworld", "business", "privacy"]` |
 | nearAddress | _____ (mainnet account for the prize) |
-| projectUrl | https://github.com/nsulyman-boop/standing-order |
+| projectUrl | https://github.com/unajijacob6-create/standing-order |
 | demoUrl | https://x.com/_____/status/_____ |
 | idea | see below |
 | consent | true (after reading: "I agree that the organizers may use these details to review our submission and contact us about this hackathon.") |

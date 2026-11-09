@@ -8,7 +8,7 @@ custom proposal templates without changing Trezu.
 Deadline: 2026-11-14 23:59 UTC. Each phase ends with its own tests passing before the next starts.
 
 **Status (2026-11-08):** Phases 0–8 built and tested; live on testnet (`docs/TESTNET.md`); repo public at
-github.com/nsulyman-boop/standing-order. Outstanding: the Phase 5 exit test (one mainnet routed payout,
+github.com/unajijacob6-create/standing-order. Outstanding: the Phase 5 exit test (one mainnet routed payout,
 `docs/MAINNET.md`, needs mainnet funds), the X post and the submission.
 
 Dropped: the Phase 1 `wasm < 300 KB` target (the release wasm is ~409 KB with `opt-level = "z"`, `lto` and a single

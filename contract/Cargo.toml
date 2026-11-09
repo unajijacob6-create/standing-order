@@ -4,7 +4,7 @@ description = "Recurring payroll and scheduled payouts for Sputnik DAO treasurie
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/nsulyman-boop/standing-order"
+repository = "https://github.com/unajijacob6-create/standing-order"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

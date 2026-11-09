@@ -1,6 +1,6 @@
 name: pages
 
-# Builds web/ and publishes it to https://nsulyman-boop.github.io/standing-order/
+# Builds web/ and publishes it to https://unajijacob6-create.github.io/standing-order/
 on:
   push:
     branches: [main]
@@ -29,7 +29,7 @@ jobs:
       VITE_CONTRACT: standing-order.testnet
       VITE_DAO: payroll-demo.sputnik-v2.testnet
       VITE_TOKEN: usdc.fakes.testnet
-      VITE_REPO_URL: https://github.com/nsulyman-boop/standing-order
+      VITE_REPO_URL: https://github.com/unajijacob6-create/standing-order
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

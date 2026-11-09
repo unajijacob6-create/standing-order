@@ -5,7 +5,7 @@ export const DAO = import.meta.env.VITE_DAO ?? "payroll-demo.sputnik-v2.testnet"
 export const TOKEN = import.meta.env.VITE_TOKEN ?? "usdc.fakes.testnet";
 export const KEEPER_URL = import.meta.env.VITE_KEEPER_URL ?? "";
 export const EXPLORER = NETWORK === "mainnet" ? "https://nearblocks.io" : "https://testnet.nearblocks.io";
-export const REPO_URL = import.meta.env.VITE_REPO_URL ?? "https://github.com/nsulyman-boop/standing-order";
+export const REPO_URL = import.meta.env.VITE_REPO_URL ?? "https://github.com/unajijacob6-create/standing-order";
 
 /** Curated cross-chain destinations (NEAR Intents asset ids, from https://1click.chaindefuser.com/v0/tokens). */
 export const DESTINATIONS = [

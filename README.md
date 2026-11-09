@@ -1,10 +1,10 @@
 # Standing Order
 
-![tests](https://github.com/nsulyman-boop/standing-order/actions/workflows/test.yml/badge.svg)
+![tests](https://github.com/unajijacob6-create/standing-order/actions/workflows/test.yml/badge.svg)
 
 **Vote once, pay every period on NEAR; cross-chain delivery through NEAR Intents, verified on-chain (mainnet demo pending).**
 
-**Live dashboard:** https://nsulyman-boop.github.io/standing-order/ (reads the testnet contract directly; payouts land every 10 minutes; CSV export of every payout on the page)
+**Live dashboard:** https://unajijacob6-create.github.io/standing-order/ (reads the testnet contract directly; payouts land every 10 minutes; CSV export of every payout on the page)
 
 A Sputnik DAO funds and authorises a payroll plan in a single vote. From then on the Standing Order
 contract pays every contributor on schedule, within the caps the council set, until the council
@@ -89,7 +89,7 @@ NEAR tools and why each one is needed (none is decorative; remove one and a colu
 ### 0. One-command verification (no keys, no funds, about 20 s)
 
 ```bash
-git clone https://github.com/nsulyman-boop/standing-order && cd standing-order
+git clone https://github.com/unajijacob6-create/standing-order && cd standing-order
 npm ci
 npm run judge            # behind a proxy: export NODE_USE_ENV_PROXY=1
 ```
@@ -118,7 +118,7 @@ and downloads the NEAR sandbox binary. Later runs take about 3 minutes. On conta
 open-file limit the C compiler builds a small fd-limit shim for the sandbox node (`scripts/sandbox-rlimit-shim.c`).
 
 ```bash
-git clone https://github.com/nsulyman-boop/standing-order && cd standing-order
+git clone https://github.com/unajijacob6-create/standing-order && cd standing-order
 ./scripts/test.sh
 ```
 
@@ -145,7 +145,7 @@ others every 30–60 minutes, while they are funded; when a plan cannot afford a
 cd web && npm install && npm run dev      # then open http://localhost:3000
 ```
 
-Live: https://nsulyman-boop.github.io/standing-order/
+Live: https://unajijacob6-create.github.io/standing-order/
 
 See: the dashboard with active plans, countdown to the next payday, payout history with explorer
 links, the DAO's Standing Order proposals (including proposal #5, compiled and filed with Trezu's
@@ -283,7 +283,7 @@ captured 1Click fixtures and the tests were verified by running them. Reused: `n
 React/Vite, `@fontsource` fonts. Trezu's template engine is **not** vendored:
 `trezu-templates/fetch-trezu.sh` clones NEAR-DevHub/trezu so our checker can run Trezu's own validator.
 
-Second project by the same builder: none. Full history: https://github.com/nsulyman-boop/standing-order/commits/main.
+Second project by the same builder: none. Full history: https://github.com/unajijacob6-create/standing-order/commits/main.
 
 ## Credits and prior art
 
