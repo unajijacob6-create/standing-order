@@ -6,7 +6,8 @@
 // most one polling interval, and can never redirect funds or change a plan.
 //
 // Config (keeper/.env or environment): NEAR_NETWORK, NEAR_RPC_URL, SO_CONTRACT, KEEPER_ACCOUNT,
-// KEEPER_KEY (ed25519:...), POLL_SECONDS (default 15), KEEPER_HTTP_PORT (optional status endpoint).
+// KEEPER_KEY (ed25519:...), POLL_SECONDS (default 15), KEEPER_HTTP_PORT (optional status endpoint),
+// KEEPER_MAX_SECONDS (optional: exit the loop after this long; the GitHub Actions keeper uses it).
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
@@ -25,6 +26,8 @@ const KEEPER_ACCOUNT = must("KEEPER_ACCOUNT");
 const KEEPER_KEY = must("KEEPER_KEY").trim().replace(/^["']|["']$/g, "") as KeyPairString;
 const POLL_SECONDS = Number(process.env.POLL_SECONDS ?? 15);
 const ONCE = process.argv.includes("--once");
+// Optional: stop the polling loop after this many seconds (CI runs one bounded loop per job, then hands over).
+const MAX_SECONDS = Number(process.env.KEEPER_MAX_SECONDS ?? 0);
 const LOG_FILE = process.env.KEEPER_LOG ?? path.join(here, "..", "data", "runs.jsonl");
 const CROSSCHAIN: Mode = parseMode(process.env.CROSSCHAIN, NETWORK === "mainnet" ? "live" : "dry");
 const TGAS_300 = 300n * 10n ** 12n;
@@ -168,6 +171,7 @@ async function main(): Promise<void> {
   await assertKeyIsRestricted();
   if (process.env.KEEPER_HTTP_PORT) startStatusServer(Number(process.env.KEEPER_HTTP_PORT));
   let backoff = POLL_SECONDS;
+  const deadline = MAX_SECONDS > 0 ? Date.now() + MAX_SECONDS * 1000 : Infinity;
   for (;;) {
     try {
       await tick();
@@ -185,6 +189,12 @@ async function main(): Promise<void> {
       }
     }
     if (ONCE) break;
+    if (Date.now() + backoff * 1000 >= deadline) {
+      // Bounded loop: fail the job only if the last tick failed, so a persistent problem shows up red.
+      log("keeper stopping", { reason: "KEEPER_MAX_SECONDS reached", lastError: state.lastError });
+      if (state.lastError) process.exitCode = 1;
+      break;
+    }
     await sleep(backoff * 1000);
   }
 }

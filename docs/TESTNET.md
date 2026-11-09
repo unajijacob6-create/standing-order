@@ -86,7 +86,9 @@ dashboard at it with `VITE_KEEPER_URL=http://localhost:8787/`. Without `VITE_KEE
 ## 2026-11-09: schedules realigned for judging
 
 - The in-container keeper stopped when its worker restarted (~22:28 UTC Nov 8), so payouts paused for ~2.5 h. Lesson: the
-  keeper now also runs on GitHub Actions every 5 minutes (`.github/workflows/keeper.yml`) with its own `run_due`-only key.
+  keeper now also runs on GitHub Actions (`.github/workflows/keeper.yml`) with its own `run_due`-only key.
+- Nov 9: GitHub's 5-minute cron fired only every 10–70 minutes, so a payday was 48 minutes late. Each keeper run now
+  polls every 30 s for ~55 minutes and dispatches the next run itself; cron only restarts the chain if it breaks.
 - Proposals #14–#16 (one per plan: pause → `update_plan` interval → `resume_plan` with `skip_missed`) realigned plan #1 to
   30 min, plan #2 to hourly, plan #3 to 10 min, with no back pay. Proposals #17–#19 topped the plans up to last past Nov 25.
 - Proposals #20–#21 (retitle plan #1) were marked Approved by Sputnik although the inner `update_plan` panicked: the longer

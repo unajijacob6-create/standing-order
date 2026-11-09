@@ -19,7 +19,7 @@ with Trezu's own template engine; no Trezu code is modified.
 Built at NEAR HACKATHON (Nov 2026). Tracks: `social` (Social Money), `realworld` (Real-World Money), `business` (Autonomous Business), `privacy` (Privacy & Private AI).
 
 **Live numbers** (testnet, read from the contract on 2026-11-09 02:45 UTC; `npm run judge` re-reads them):
-4 active plans · 74 paydays run · 207 payouts · 17,035 USDC.e paid · 26 DAO proposals (25 approved, 1 rejected; one filed through Trezu's template engine, one drafted by the clerk, two for the guardian demo) · keeper running from GitHub Actions every 5 minutes · 78 tests in CI (53 contract unit, 9 sandbox, 16 clerk), each fix from the Nov 9 security review covered by a regression test.
+4 active plans · 74 paydays run · 207 payouts · 17,035 USDC.e paid · 26 DAO proposals (25 approved, 1 rejected; one filed through Trezu's template engine, one drafted by the clerk, two for the guardian demo) · keeper polling every 30 s from GitHub Actions · 78 tests in CI (53 contract unit, 9 sandbox, 16 clerk), each fix from the Nov 9 security review covered by a regression test.
 
 ![Dashboard](docs/screenshots/desktop.png)
 
@@ -174,8 +174,10 @@ proposal filed and approved → `run_due` returns `"Paused"` and the script prin
 
 ### D. Run the keeper
 
-The demo keeper runs from this repository's GitHub Actions every 5 minutes
-([keeper.yml](.github/workflows/keeper.yml)); the `KEEPER_KEY` secret is a key that can only call `run_due`.
+The demo keeper runs from this repository's GitHub Actions ([keeper.yml](.github/workflows/keeper.yml)): each run
+polls the contract every 30 s for ~55 minutes, then dispatches the next run itself, because GitHub's cron fired
+10–70 minutes apart instead of every 5 (cron stays as a restart path). The `KEEPER_KEY` secret is a key that can only
+call `run_due`.
 To run your own:
 
 ```bash

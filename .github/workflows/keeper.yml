@@ -1,12 +1,17 @@
-# Unattended keeper: every 5 minutes, trigger any due Standing Order payroll run on testnet.
+# Unattended keeper: polls the testnet contract every 30 s and calls run_due on any due plan.
 #
 # The KEEPER_KEY secret is a NEAR function-call access key that can ONLY call `run_due` on the
 # contract (the keeper refuses to start with anything broader). If it ever leaked, the worst a
 # holder could do is make a payment that is already due happen on time. That is why it is safe
-# to keep in CI. GitHub may delay scheduled runs; the keeper catches up a few periods per run.
-# Schedules register when this file is pushed to the default branch. GitHub drops scheduled runs
-# under load, so a second entry offset by 2 minutes keeps one missed slot from stalling payday;
-# run_due is idempotent per period, so a double trigger pays nothing extra.
+# to keep in CI.
+#
+# Why a loop and not one tick per cron: GitHub runs scheduled workflows best-effort and on this repo
+# fired them 10-70 minutes apart instead of every 5, which left payroll up to 48 minutes late.
+# So each run polls for ~55 minutes, then dispatches the next run itself (workflow_dispatch from
+# GITHUB_TOKEN is allowed to start a run). The concurrency group keeps exactly one keeper running.
+# The cron entries are only a restart path in case the chain ever breaks (e.g. a cancelled run).
+# Kill switch: set the repository variable KEEPER_CHAIN to "off" or cancel the running keeper (disable the workflow to stop cron too).
+# run_due is idempotent per period, so overlapping triggers pay nothing extra.
 name: keeper
 
 on:
@@ -21,11 +26,12 @@ concurrency:
 
 permissions:
   contents: read
+  actions: write # only to dispatch the next keeper run
 
 jobs:
   run-due:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 65
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -33,7 +39,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Trigger due runs (run_due-only key)
+      - name: Keep payroll running for ~55 minutes (run_due-only key)
         env:
           NEAR_NETWORK: testnet
           SO_CONTRACT: standing-order.testnet
@@ -42,8 +48,18 @@ jobs:
           KEEPER_KEY: ${{ secrets.KEEPER_KEY }}
           CROSSCHAIN: dry
           MAX_CATCHUP: "3"
+          POLL_SECONDS: "30"
+          KEEPER_MAX_SECONDS: "3300"
         run: |
           if [ -z "$KEEPER_KEY" ]; then
             echo "KEEPER_KEY secret not set; see README 'Run the keeper'"; exit 0
           fi
-          npm run keeper:once
+          npm run keeper
+      - name: Hand over to the next keeper run
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && vars.KEEPER_CHAIN != 'off' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HAS_KEY: ${{ secrets.KEEPER_KEY != '' }}
+        run: |
+          if [ "$HAS_KEY" != "true" ]; then echo "no KEEPER_KEY; not chaining"; exit 0; fi
+          gh workflow run keeper.yml --repo "$GITHUB_REPOSITORY" --ref main
