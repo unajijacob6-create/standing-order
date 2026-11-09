@@ -305,7 +305,12 @@ select option { color: #000; }
 .verify-toggle[aria-expanded="true"] { margin-bottom: 8px; }
 @media (prefers-reduced-motion: reduce) { .show-more svg, .how-toggle svg, .verify-toggle svg { transition: none; } }
 @media (max-width: 960px) {
-  .header .wrap { flex-wrap: wrap; row-gap: 8px; }
+  /* The tabs wrap onto their own row here, so the header must grow with them instead of staying 66px tall. */
+  .header .wrap { flex-wrap: wrap; row-gap: 8px; height: auto; min-height: 66px; padding-top: 10px; padding-bottom: 10px; }
   .header .nav { display: flex; order: 10; width: 100%; margin: 0; justify-content: center; }
   .header .nav a { flex: 1; text-align: center; }
 }
+
+/* Anchor targets (#requests, #clerk, #live, …) land below the sticky header, which is two rows tall on narrow screens. */
+html { scroll-padding-top: 80px; }
+@media (max-width: 960px) { html { scroll-padding-top: 130px; } }

@@ -106,6 +106,14 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
+  // A deep link opened fresh (e.g. …/#clerk on a phone): the section only exists once the data has loaded, so the
+  // browser's own jump finds nothing. Scroll to it once, after the first load.
+  useEffect(() => {
+    if (!loaded) return;
+    const target = sectionFromHash();
+    if (target) requestAnimationFrame(() => document.getElementById(target)?.scrollIntoView());
+  }, [loaded]);
+
   const select = (id: number) => {
     setSelected(id);
     const hash = `#plan-${id}`;
