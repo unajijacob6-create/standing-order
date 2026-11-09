@@ -191,7 +191,7 @@ export default function App() {
             <div className="proof">
               <a className="pill" href={`${EXPLORER}/address/${CONTRACT}`} target="_blank" rel="noreferrer"><span className="dot" style={{ background: "var(--green)" }} />Contract on {NETWORK}</a>
               <a className="pill" href={`${EXPLORER}/address/${DAO}`} target="_blank" rel="noreferrer"><span className="dot" style={{ background: "var(--purple)" }} />Sputnik DAO treasury</a>
-              <a className="pill" href={`${REPO_URL}/actions/workflows/test.yml`} target="_blank" rel="noreferrer"><span className="dot" style={{ background: "var(--blue)" }} />49 tests passing in CI</a>
+              <a className="pill" href={`${REPO_URL}/actions/workflows/test.yml`} target="_blank" rel="noreferrer"><span className="dot" style={{ background: "var(--blue)" }} />57 tests passing in CI</a>
             </div>
           </div>
           <div className="coins">

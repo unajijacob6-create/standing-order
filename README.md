@@ -122,7 +122,7 @@ git clone https://github.com/unajijacob6-create/standing-order && cd standing-or
 ./scripts/test.sh
 ```
 
-See: `test result: ok. 40 passed` (unit tests, including verification of a **real signed 1Click quote** against
+See: `test result: ok. 43 passed` (unit tests, including verification of a **real signed 1Click quote** against
 1Click's production key), then three sandbox suites: `native_plans` 5 passed, `ft_plans` 3 passed,
 `routed_payouts` 1 passed. The sandbox tests deploy the contract to a local NEAR node, create and fund
 plans through `ft_transfer_call`, pay recipients, re-credit failed transfers, refuse five forged or
