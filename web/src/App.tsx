@@ -36,7 +36,7 @@ export default function App() {
   const [loaded, setLoaded] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const [triggering, setTriggering] = useState<number | null>(null);
-  const [toast, setToast] = useState<{ ok: boolean; text: string } | null>(null);
+  const [toast, setToast] = useState<{ tone: "ok" | "err" | "neutral"; text: string } | null>(null);
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     try { return (localStorage.getItem("so-theme") as "dark" | "light") || "dark"; } catch { return "dark"; }
   });
@@ -105,10 +105,16 @@ export default function App() {
       if (!wallet.connected) await wallet.signIn();
       setTriggering(planId);
       await wallet.call("run_due", { plan_id: planId, routes: null }, "0", "300000000000000");
-      setToast({ ok: true, text: `Payday for plan #${planId} triggered. Payouts appear below in a few seconds.` });
+      setToast({ tone: "ok", text: `Payday for plan #${planId} triggered. Payouts appear below in a few seconds.` });
       setTimeout(() => setRefresh((r) => r + 1), 2500);
     } catch (e) {
-      setToast({ ok: false, text: String((e as any)?.message ?? e).slice(0, 200) });
+      const message = String((e as any)?.message ?? e);
+      // near-connect throws "User rejected" (picker closed) and "Wallet closed" (wallet window closed).
+      if (/reject|cancel|closed/i.test(message)) {
+        setToast({ tone: "neutral", text: "Cancelled in your wallet. Nothing was sent." });
+      } else {
+        setToast({ tone: "err", text: `Couldn’t trigger payday: ${message}`.slice(0, 200) });
+      }
     } finally {
       setTriggering(null);
     }
@@ -214,7 +220,7 @@ export default function App() {
         </section>
 
         {error && <div className="note err-text" style={{ marginBottom: 16 }}>RPC error: {error}</div>}
-        {toast && <div className={`note ${toast.ok ? "ok-text" : "err-text"}`} style={{ marginBottom: 16 }}>{toast.text}</div>}
+        {toast && <div className={`note ${toast.tone === "ok" ? "ok-text" : toast.tone === "err" ? "err-text" : ""}`} role="status" style={{ marginBottom: 16 }}>{toast.text}</div>}
 
         <section className="grid">
           <div className="col">
