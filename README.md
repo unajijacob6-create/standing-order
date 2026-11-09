@@ -299,7 +299,7 @@ captured 1Click fixtures and the tests were verified by running them. Reused: `n
 React/Vite, `@fontsource` fonts. Trezu's template engine is **not** vendored:
 `trezu-templates/fetch-trezu.sh` clones NEAR-DevHub/trezu so our checker can run Trezu's own validator.
 
-Second project by the same builder: none. Full history: https://github.com/unajijacob6-create/standing-order/commits/main.
+Other project by the same builder: [Keyhole](https://github.com/unajijacob6-create/keyhole), which shows who can change a NEAR contract's code and whether the running code matches what was verified. It is a separate, independent project with its own repository and submission (rule Q-015). Full history: https://github.com/unajijacob6-create/standing-order/commits/main.
 
 ## Credits and prior art
 
