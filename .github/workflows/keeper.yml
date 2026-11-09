@@ -4,12 +4,15 @@
 # contract (the keeper refuses to start with anything broader). If it ever leaked, the worst a
 # holder could do is make a payment that is already due happen on time. That is why it is safe
 # to keep in CI. GitHub may delay scheduled runs; the keeper catches up a few periods per run.
-# Schedules register when this file is pushed to the default branch.
+# Schedules register when this file is pushed to the default branch. GitHub drops scheduled runs
+# under load, so a second entry offset by 2 minutes keeps one missed slot from stalling payday;
+# run_due is idempotent per period, so a double trigger pays nothing extra.
 name: keeper
 
 on:
   schedule:
     - cron: "*/5 * * * *"
+    - cron: "2-59/5 * * * *"
   workflow_dispatch: {}
 
 concurrency:
