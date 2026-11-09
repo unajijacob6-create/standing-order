@@ -8,11 +8,17 @@ function actionLabel(info: ProposalAction): string {
   if (info.kind === "storage") return "Register storage";
   switch (info.method) {
     case "create_plan": return `Start recurring payroll: ${info.args?.msg?.plan?.title ?? ""}`;
-    case "fund_plan": return `Top up plan #${info.args?.msg?.plan_id}`;
+    case "fund_plan": return `Top up plan #${info.args?.msg?.plan_id ?? info.args?.plan_id}`;
     case "pause_plan": return `Pause plan #${info.args?.plan_id}`;
     case "resume_plan": return `Resume plan #${info.args?.plan_id}${info.args?.skip_missed ? " (skip missed)" : ""}`;
     case "cancel_plan": return `Cancel plan #${info.args?.plan_id} and return funds`;
     case "update_plan": return `Update plan #${info.args?.plan_id}`;
+    case "set_guardians": {
+      const g: unknown[] = Array.isArray(info.args?.guardians) ? info.args.guardians : [];
+      return g.length === 0 ? `Remove all guardians of plan #${info.args?.plan_id}` : `Set guardians of plan #${info.args?.plan_id}: ${g.join(", ")}`;
+    }
+    case "sweep": return `Return ${info.args?.amount ? "part of the " : ""}unused funds of plan #${info.args?.plan_id}`;
+    case "set_config": return "Change contract settings";
     default: return info.method || info.kind;
   }
 }
