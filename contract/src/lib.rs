@@ -25,6 +25,8 @@ const GAS_FT_TRANSFER: Gas = Gas::from_tgas(20);
 const GAS_ON_PAYOUT: Gas = Gas::from_tgas(5);
 /// Extra gas budgeted per payout when signed 1Click quotes must be verified.
 const GAS_ROUTE_VERIFY: Gas = Gas::from_tgas(15);
+/// Gas for registering a 1Click deposit address on the token before paying it.
+const GAS_STORAGE_DEPOSIT: Gas = Gas::from_tgas(10);
 /// Gas kept back after the last payout of a call for bookkeeping.
 const GAS_RESERVE: Gas = Gas::from_tgas(20);
 const ONE_YOCTO: NearToken = NearToken::from_yoctonear(1);
@@ -243,7 +245,7 @@ impl Contract {
             Asset::Ft { .. } => GAS_PER_FT_PAYOUT,
         };
         if !routes.is_empty() {
-            gas_per_payout = Gas::from_gas(gas_per_payout.as_gas() + GAS_ROUTE_VERIFY.as_gas());
+            gas_per_payout = Gas::from_gas(gas_per_payout.as_gas() + GAS_ROUTE_VERIFY.as_gas() + GAS_STORAGE_DEPOSIT.as_gas());
         }
         let storage_before = env::storage_usage();
         let run_index = plan.runs_completed;
@@ -288,7 +290,10 @@ impl Contract {
                 },
             );
             events::payout_dispatched(plan_id, seq, run_index, &recipient.account_id, amount);
-            self.dispatch_transfer(&plan.asset, &pay_to, amount, plan_id, seq);
+            match (&route, &plan.asset) {
+                (Some(_), Asset::Ft { contract }) => self.dispatch_routed_transfer(contract, &pay_to, amount, plan_id, seq),
+                _ => self.dispatch_transfer(&plan.asset, &pay_to, amount, plan_id, seq),
+            }
             cursor += 1;
             sent += 1;
         }
@@ -853,6 +858,28 @@ impl Contract {
                 .then(callback)
                 .detach(),
         }
+    }
+
+    /// 1Click deposit addresses are fresh implicit accounts that are not registered on the token,
+    /// so a plain ft_transfer to them fails. Register and transfer in ONE receipt (the actions of a
+    /// batch succeed or fail together); the contract pays the 0.00125 NEAR registration.
+    fn dispatch_routed_transfer(&self, token: &AccountId, to: &AccountId, amount: u128, plan_id: u64, seq: u32) {
+        let callback = Self::ext(env::current_account_id()).with_static_gas(GAS_ON_PAYOUT).on_payout(plan_id, seq, U128(amount));
+        Promise::new(token.clone())
+            .function_call(
+                "storage_deposit",
+                near_sdk::serde_json::json!({"account_id": to, "registration_only": true}).to_string().into_bytes(),
+                NearToken::from_yoctonear(MIN_STORAGE_DEPOSIT),
+                GAS_STORAGE_DEPOSIT,
+            )
+            .function_call(
+                "ft_transfer",
+                near_sdk::serde_json::json!({"receiver_id": to, "amount": U128(amount), "memo": format!("standing-order plan {} payout {}", plan_id, seq)}).to_string().into_bytes(),
+                ONE_YOCTO,
+                GAS_FT_TRANSFER,
+            )
+            .then(callback)
+            .detach();
     }
 
     fn sweep_internal(&mut self, plan_id: u64, amount: Option<u128>) -> Option<Promise> {

@@ -101,8 +101,10 @@ async fn routed_payout_goes_to_verified_deposit_address() -> anyhow::Result<()> 
     let env = setup().await?;
     let alice = env.worker.dev_create_account().await?; // wants USDC on Base
     let bob = env.worker.dev_create_account().await?; // paid on NEAR
-    let deposit = env.worker.dev_create_account().await?; // stands in for the 1Click deposit address
-    for a in [alice.id(), bob.id(), deposit.id()] {
+    // A real 1Click deposit address: a fresh 64-hex implicit account, NOT registered on the token.
+    // The contract must register it before transferring (a plain ft_transfer would fail).
+    let deposit_id: near_workspaces::AccountId = "702bb1cdf6e6d1f80776679b6e0f2745226efd76cda7563fe0f45ee1d1929d87".parse()?;
+    for a in [alice.id(), bob.id()] {
         register(&env.token, &env.dao, a).await?;
     }
     alice
@@ -127,37 +129,37 @@ async fn routed_payout_goes_to_verified_deposit_address() -> anyhow::Result<()> 
     assert_eq!(dests[0].0, alice.id().to_string());
 
     let origin = format!("nep141:{}", env.token.id());
-    let good = signed_quote(&env.signer, &origin, 100 * USD, BASE_ADDR, alice.id().as_str(), deposit.id().as_str(), "2026-11-12T06:00:00.000Z");
+    let good = signed_quote(&env.signer, &origin, 100 * USD, BASE_ADDR, alice.id().as_str(), deposit_id.as_str(), "2026-11-12T06:00:00.000Z");
 
     // Wrong amount: refused, nothing paid.
-    let bad_amount = signed_quote(&env.signer, &origin, 99 * USD, BASE_ADDR, alice.id().as_str(), deposit.id().as_str(), "2026-11-12T06:00:00.000Z");
+    let bad_amount = signed_quote(&env.signer, &origin, 99 * USD, BASE_ADDR, alice.id().as_str(), deposit_id.as_str(), "2026-11-12T06:00:00.000Z");
     let res = env.dao.call(env.so.id(), "run_due").args_json(json!({"plan_id": 1, "routes": [{"recipient": alice.id(), "quote": bad_amount}]})).gas(Gas::from_tgas(300)).transact().await?;
     assert!(res.is_failure());
     assert!(format!("{:?}", res.failures()).contains("Route amount does not match"), "{:?}", res.failures());
 
     // Refund target that is not the recipient: refused.
-    let bad_refund = signed_quote(&env.signer, &origin, 100 * USD, BASE_ADDR, "attacker.near", deposit.id().as_str(), "2026-11-12T06:00:00.000Z");
+    let bad_refund = signed_quote(&env.signer, &origin, 100 * USD, BASE_ADDR, "attacker.near", deposit_id.as_str(), "2026-11-12T06:00:00.000Z");
     let res = env.dao.call(env.so.id(), "run_due").args_json(json!({"plan_id": 1, "routes": [{"recipient": alice.id(), "quote": bad_refund}]})).gas(Gas::from_tgas(300)).transact().await?;
     assert!(format!("{:?}", res.failures()).contains("refund target"), "{:?}", res.failures());
 
     // Quote for a different address than alice registered: refused.
-    let bad_addr = signed_quote(&env.signer, &origin, 100 * USD, "0x1111111111111111111111111111111111111111", alice.id().as_str(), deposit.id().as_str(), "2026-11-12T06:00:00.000Z");
+    let bad_addr = signed_quote(&env.signer, &origin, 100 * USD, "0x1111111111111111111111111111111111111111", alice.id().as_str(), deposit_id.as_str(), "2026-11-12T06:00:00.000Z");
     let res = env.dao.call(env.so.id(), "run_due").args_json(json!({"plan_id": 1, "routes": [{"recipient": alice.id(), "quote": bad_addr}]})).gas(Gas::from_tgas(300)).transact().await?;
     assert!(format!("{:?}", res.failures()).contains("recipient address differs"), "{:?}", res.failures());
 
     // Signed by someone other than the configured key: refused.
     let other = SigningKey::generate(&mut rand::rngs::OsRng);
-    let forged = signed_quote(&other, &origin, 100 * USD, BASE_ADDR, alice.id().as_str(), deposit.id().as_str(), "2026-11-12T06:00:00.000Z");
+    let forged = signed_quote(&other, &origin, 100 * USD, BASE_ADDR, alice.id().as_str(), deposit_id.as_str(), "2026-11-12T06:00:00.000Z");
     let res = env.dao.call(env.so.id(), "run_due").args_json(json!({"plan_id": 1, "routes": [{"recipient": alice.id(), "quote": forged}]})).gas(Gas::from_tgas(300)).transact().await?;
     assert!(format!("{:?}", res.failures()).contains("does not verify"), "{:?}", res.failures());
 
     // A route for bob, who never registered a destination: refused.
-    let for_bob = signed_quote(&env.signer, &origin, 50 * USD, BASE_ADDR, bob.id().as_str(), deposit.id().as_str(), "2026-11-12T06:00:00.000Z");
+    let for_bob = signed_quote(&env.signer, &origin, 50 * USD, BASE_ADDR, bob.id().as_str(), deposit_id.as_str(), "2026-11-12T06:00:00.000Z");
     let res = env.dao.call(env.so.id(), "run_due").args_json(json!({"plan_id": 1, "routes": [{"recipient": bob.id(), "quote": for_bob}]})).gas(Gas::from_tgas(300)).transact().await?;
     assert!(format!("{:?}", res.failures()).contains("no registered destination"), "{:?}", res.failures());
 
     // Nothing moved so far.
-    assert_eq!(ft_balance(&env.token, deposit.id()).await?, 0);
+    assert_eq!(ft_balance(&env.token, &deposit_id).await?, 0);
     assert_eq!(ft_balance(&env.token, alice.id()).await?, 0);
 
     // The genuine route: alice's 100 goes to the deposit address, bob's 50 to bob.
@@ -165,11 +167,11 @@ async fn routed_payout_goes_to_verified_deposit_address() -> anyhow::Result<()> 
     assert!(res.is_success(), "{:?}", res.failures());
     let logs = res.logs().iter().map(|s| s.to_string()).collect::<Vec<_>>();
     assert!(logs.iter().any(|l| l.contains("payout_routed")), "{logs:?}");
-    assert_eq!(ft_balance(&env.token, deposit.id()).await?, 100 * USD);
+    assert_eq!(ft_balance(&env.token, &deposit_id).await?, 100 * USD);
     assert_eq!(ft_balance(&env.token, alice.id()).await?, 0);
     assert_eq!(ft_balance(&env.token, bob.id()).await?, 50 * USD);
     let route: Value = env.so.view("get_route").args_json(json!({"plan_id": 1, "seq": 0})).await?.json()?;
-    assert_eq!(route["deposit_address"], deposit.id().to_string());
+    assert_eq!(route["deposit_address"], deposit_id.to_string());
     assert_eq!(route["destination_address"], BASE_ADDR);
     assert_eq!(route["destination_asset"], BASE_USDC);
     let none: Option<Value> = env.so.view("get_route").args_json(json!({"plan_id": 1, "seq": 1})).await?.json()?;
@@ -177,12 +179,12 @@ async fn routed_payout_goes_to_verified_deposit_address() -> anyhow::Result<()> 
 
     // Expired deposit address: refused on the next run.
     env.worker.fast_forward(5).await?;
-    let expired = signed_quote(&env.signer, &origin, 100 * USD, BASE_ADDR, alice.id().as_str(), deposit.id().as_str(), "2020-01-01T00:00:00.000Z");
+    let expired = signed_quote(&env.signer, &origin, 100 * USD, BASE_ADDR, alice.id().as_str(), deposit_id.as_str(), "2020-01-01T00:00:00.000Z");
     let res = env.dao.call(env.so.id(), "run_due").args_json(json!({"plan_id": 1, "routes": [{"recipient": alice.id(), "quote": expired}]})).gas(Gas::from_tgas(300)).transact().await?;
     // Either NotDue (interval not elapsed) or the expiry error; both mean no payment went out.
     if res.is_failure() {
         assert!(format!("{:?}", res.failures()).contains("expires too soon"), "{:?}", res.failures());
     }
-    assert_eq!(ft_balance(&env.token, deposit.id()).await?, 100 * USD);
+    assert_eq!(ft_balance(&env.token, &deposit_id).await?, 100 * USD);
     Ok(())
 }

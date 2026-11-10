@@ -299,7 +299,7 @@ captured 1Click fixtures and the tests were verified by running them. Reused: `n
 React/Vite, `@fontsource` fonts. Trezu's template engine is **not** vendored:
 `trezu-templates/fetch-trezu.sh` clones NEAR-DevHub/trezu so our checker can run Trezu's own validator.
 
-Second project by the same builder: none. Full history: https://github.com/unajijacob6-create/standing-order/commits/main.
+Second project by the same builder: [Plinth](https://github.com/unajijacob6-create/plinth), a keyless NEAR fund with an exit nobody can block. Full history: https://github.com/unajijacob6-create/standing-order/commits/main.
 
 ## Credits and prior art
 
