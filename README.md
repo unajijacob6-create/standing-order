@@ -299,7 +299,7 @@ captured 1Click fixtures and the tests were verified by running them. Reused: `n
 React/Vite, `@fontsource` fonts. Trezu's template engine is **not** vendored:
 `trezu-templates/fetch-trezu.sh` clones NEAR-DevHub/trezu so our checker can run Trezu's own validator.
 
-Other project by the same builder: [Keyhole](https://github.com/unajijacob6-create/keyhole), which shows who can change a NEAR contract's code and whether the running code matches what was verified. It is a separate, independent project with its own repository and submission (rule Q-015). Full history: https://github.com/unajijacob6-create/standing-order/commits/main.
+Other project by the same builder: [Plinth](https://github.com/unajijacob6-create/plinth), a NEAR fund on an account with no access keys, whose manager can only propose mandate-checked trades and whose depositors can always exit in kind. It is a separate, independent project with its own repository and submission (rule Q-015). Plinth adapts this repository's 1Click quote verifier, and says so. Full history: https://github.com/unajijacob6-create/standing-order/commits/main.
 
 ## Credits and prior art
 
